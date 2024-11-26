@@ -10,6 +10,7 @@ from transformers.models.llama.modeling_llama import (
     apply_rotary_pos_emb
 )
 from transformers.cache_utils import Cache
+from src.kvhash import KVHashCache
 
 def kv_hash_forward(
         self,
@@ -23,7 +24,10 @@ def kv_hash_forward(
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        print("here")
+        
+        if self.config.enable_kvhash and not use_cache and not hasattr(self, "cache"):
+            self.cache = KVHashCache()
+
         bsz, q_len, _ = hidden_states.size()
 
         if self.config.pretraining_tp > 1:
@@ -104,10 +108,10 @@ def kv_hash_forward(
 
         return attn_output, attn_weights, past_key_value
 
-def convert_llama_with_kv_hash(model, config):
+def convert_llama_with_kv_hash(model):
     for name, module in reversed(model._modules.items()):
         if len(list(module.children())) > 0:
-            model._modules[name] = convert_llama_with_kv_hash(module, config)
+            model._modules[name] = convert_llama_with_kv_hash(module)
 
         if isinstance(module, LlamaAttention):
 

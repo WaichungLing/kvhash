@@ -4,6 +4,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 from src.args import parse_args
 from src.replace_llama import convert_llama_with_kv_hash
+from src.kvhash import KVHashCache
 from config import tokens
 
 def main():
@@ -26,26 +27,25 @@ def main():
         cache_dir=args.cache_dir,
         token=tokens.HF_TOKEN
     )
+    if args.enable_kvhash:
+        config.enable_kvhash = args.enable_kvhash
+        config.hash_budget = args.hash_budget
     print(config)
 
     print("Loading model...")
-    model_kwargs = {
-        "device_map": "auto",
-    }
-
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name, 
+        config=config,
         cache_dir = args.cache_dir,
         attn_implementation="eager",
         token=tokens.HF_TOKEN
     )
 
+    use_cache = True
     if args.enable_kvhash:
-        config.enable_kvhash = args.enable_kvhash
-        config.hash_budget = args.hash_budget
-        convert_llama_with_kv_hash(model, config)
+        convert_llama_with_kv_hash(model)
+        use_cache = False
         print("[KVHash] -- replacing llama attention wit KVHash")
-        print(f"[KVHash] Config: {config}")
     model.to(args.device)
 
     print("Loading everything done")
@@ -62,7 +62,8 @@ def main():
     outputs = model.generate(
         inputs.input_ids, 
         max_new_tokens=max_length,
-        attention_mask=inputs.attention_mask
+        attention_mask=inputs.attention_mask,
+        use_cache=use_cache
     )
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
