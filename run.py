@@ -1,6 +1,6 @@
 import torch
 import os
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, DynamicCache
 
 from src.args import parse_args
 from src.replace_llama import convert_llama_with_kv_hash
@@ -8,8 +8,6 @@ from src.kvhash import KVHashCache
 from config import tokens
 
 def main():
-    # os.environ["HUGGINGFACE_TOKEN"] = tokens.HF_TOKEN
-
     args = parse_args()
 
     print("Loading tokenizer...")
@@ -41,18 +39,17 @@ def main():
         token=tokens.HF_TOKEN
     )
 
-    use_cache = True
     if args.enable_kvhash:
         convert_llama_with_kv_hash(model)
-        use_cache = False
         print("[KVHash] -- replacing llama attention wit KVHash")
     model.to(args.device)
 
     print("Loading everything done")
 
-    # 在Generate时传入max_length,和cache，加入cache的reset函数
+    past_key_value = DynamicCache().to(args.device)
+    if args.enable_kvhash:
+        past_key_value = KVHashCache().to(args.device)
 
-    # Encode input and generate output
     input_text = "Compare GPT with LLama briefly"
     max_length = 50
     inputs = tokenizer(
@@ -63,7 +60,8 @@ def main():
         inputs.input_ids, 
         max_new_tokens=max_length,
         attention_mask=inputs.attention_mask,
-        use_cache=use_cache
+        use_cache=True,
+        past_key_values = past_key_value
     )
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
 

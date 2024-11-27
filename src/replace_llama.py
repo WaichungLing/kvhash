@@ -25,8 +25,7 @@ def kv_hash_forward(
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         
-        if self.config.enable_kvhash and not use_cache and not hasattr(self, "cache"):
-            self.cache = KVHashCache()
+        # print(f"layer {self.layer_idx} ==== past_key_value {past_key_value.__class__.__name__}")
 
         bsz, q_len, _ = hidden_states.size()
 
