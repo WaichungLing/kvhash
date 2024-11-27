@@ -48,7 +48,7 @@ def main():
 
     past_key_value = DynamicCache().to(args.device)
     if args.enable_kvhash:
-        past_key_value = KVHashCache().to(args.device)
+        past_key_value = KVHashCache(num_hidden_layers=config.num_hidden_layers).to(args.device)
 
     input_text = "Compare GPT with LLama briefly"
     max_length = 50
@@ -56,6 +56,9 @@ def main():
         input_text, 
         return_tensors="pt",
     ).to(args.device)
+
+    # print(f"\nInput Text: {input_text} -- token: {inputs.input_ids.shape[1]}")
+    
     outputs = model.generate(
         inputs.input_ids, 
         max_new_tokens=max_length,
@@ -66,7 +69,7 @@ def main():
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
     # Print the result
-    print("\nInput Text:", input_text)
+    print(f"\nInput Text: {input_text} -- token: {inputs.input_ids.shape[1]}")
     print("Generated Text:", generated_text)
 
 

@@ -5,9 +5,10 @@ from transformers.cache_utils import Cache
 class KVHashCache(Cache):
     def __init__(self, num_hidden_layers: Optional[int] = None) -> None:
         super().__init__()
-        self._seen_tokens = 0  # Used in `generate` to keep tally of how many tokens the cache has seen
         self.key_cache: List[torch.Tensor] = []
         self.value_cache: List[torch.Tensor] = []
+        self.hash_values: List[torch.Tensor] = [None] * num_hidden_layers
+        self.attn_sum: List[torch.Tensor] = [None] * num_hidden_layers
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -33,6 +34,33 @@ class KVHashCache(Cache):
         to the number of layers in the model.
         """
         return len(self.key_cache)
+    
+    def update_attn_sum(self, layer_idx, attn_scores):  # Shape: (b, num_head, q_len, k_len)
+        # if layer_idx == 0:
+        #     print(f"layer idx {layer_idx}=======attn shape: {attn_scores.shape}")
+        summation = torch.sum(attn_scores, dim=2)  # Shape: (b, num_head, k_len)
+
+        if self.attn_sum[layer_idx] is None:
+            self.attn_sum[layer_idx] = summation
+        else:
+            self.attn_sum[layer_idx] += summation[:, :, :self.attn_sum[layer_idx].shape[-1]]
+            q_len = summation.shape[-1] - self.attn_sum[layer_idx].shape[-1]
+            new_in = summation[:, :, -q_len:]
+            self.attn_sum[layer_idx] = torch.cat([self.attn_sum[layer_idx], new_in], dim=2)
+        # if layer_idx == 0 and self.attn_sum[layer_idx] is not None:
+        #     print(f"attn_sum shape: {self.attn_sum[layer_idx].shape}")
+
+    def update_hash_values(self, layer_idx, q_len, key_states):
+        hash_bits = torch.matmul(key_states, self.hash_planes.transpose(-1, -2))  # Shape: (b, slen, num_head, num_plane)
+        hash_bits = (hash_bits >= 0).int()  # Convert to 1s and 0s
+        hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, slen, num_head)
+        hash_vals = hash_vals.permute(0, 2, 1)  # Transpose to (b, num_head, s_len)
+
+        if self.hash_values is None:
+            # Initialize hash_values if it is None
+            self.hash_values = hash_vals
+        else:
+            self.hash_values = torch.cat([self.hash_values, hash_vals[:, :, -q_len:]], dim=2)
 
     def update(
         self,
@@ -41,25 +69,6 @@ class KVHashCache(Cache):
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
-
-        Parameters:
-            key_states (`torch.Tensor`):
-                The new key states to cache.
-            value_states (`torch.Tensor`):
-                The new value states to cache.
-            layer_idx (`int`):
-                The index of the layer to cache the states for.
-            cache_kwargs (`Dict[str, Any]`, `optional`):
-                Additional arguments for the cache subclass. No additional arguments are used in `DynamicCache`.
-
-        Return:
-            A tuple containing the updated key and value states.
-        """
-        # Update the number of seen tokens
-        if layer_idx == 0:
-            self._seen_tokens += key_states.shape[-2]
 
         # Update the cache
         if len(self.key_cache) <= layer_idx:
