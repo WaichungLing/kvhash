@@ -8,6 +8,8 @@ from src.kvhash import KVHashCache
 from config import tokens
 
 def main():
+    torch.manual_seed(42)
+
     args = parse_args()
 
     print("Loading tokenizer...")
@@ -48,9 +50,12 @@ def main():
 
     past_key_value = DynamicCache().to(args.device)
     if args.enable_kvhash:
-        past_key_value = KVHashCache(num_hidden_layers=config.num_hidden_layers).to(args.device)
+        past_key_value = KVHashCache(
+            config,
+            num_planes=args.num_planes    
+        ).to(args.device)
 
-    input_text = "Compare GPT with LLama briefly"
+    input_text = "Introduce the llama 3.1 model"
     max_length = 50
     inputs = tokenizer(
         input_text, 

@@ -3,12 +3,17 @@ from typing import Any, Dict, List, Optional, Tuple
 from transformers.cache_utils import Cache
 
 class KVHashCache(Cache):
-    def __init__(self, num_hidden_layers: Optional[int] = None) -> None:
+    def __init__(self, config, num_planes: int = 4) -> None:
         super().__init__()
-        self.key_cache: List[torch.Tensor] = []
-        self.value_cache: List[torch.Tensor] = []
-        self.hash_values: List[torch.Tensor] = [None] * num_hidden_layers
-        self.attn_sum: List[torch.Tensor] = [None] * num_hidden_layers
+        self.config = config
+
+        self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+
+        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.div_planes = torch.randn((num_planes, self.config.head_dim))
+        self.powers_of_two = 2 ** torch.arange(num_planes - 1, -1, -1, dtype=torch.int32)
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -49,18 +54,24 @@ class KVHashCache(Cache):
             self.attn_sum[layer_idx] = torch.cat([self.attn_sum[layer_idx], new_in], dim=2)
         # if layer_idx == 0 and self.attn_sum[layer_idx] is not None:
         #     print(f"attn_sum shape: {self.attn_sum[layer_idx].shape}")
+        # TODO: group by GQA
 
-    def update_hash_values(self, layer_idx, q_len, key_states):
-        hash_bits = torch.matmul(key_states, self.hash_planes.transpose(-1, -2))  # Shape: (b, slen, num_head, num_plane)
-        hash_bits = (hash_bits >= 0).int()  # Convert to 1s and 0s
-        hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, slen, num_head)
-        hash_vals = hash_vals.permute(0, 2, 1)  # Transpose to (b, num_head, s_len)
+    def update_hash_values(self, layer_idx, key_states):   # Shape: (b, num_head, q_len, k_len)
+        hash_bits = torch.matmul(key_states, self.div_planes.transpose(-1, -2))
+        hash_bits = (hash_bits >= 0).int()
+        hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, num_head, s_len)
+        # if layer_idx == 0:
+        #     print(f"======= hash_vals shape: {hash_vals.shape}")
 
-        if self.hash_values is None:
+        if self.hash_values[layer_idx] is None:
             # Initialize hash_values if it is None
-            self.hash_values = hash_vals
+            self.hash_values[layer_idx] = hash_vals
         else:
-            self.hash_values = torch.cat([self.hash_values, hash_vals[:, :, -q_len:]], dim=2)
+            q_len = key_states.shape[2]
+            self.hash_values[layer_idx] = torch.cat([self.hash_values[layer_idx], hash_vals[:, :, -q_len:]], dim=2)
+        # if layer_idx == 0 and self.hash_values[layer_idx] is not None:
+        #     print(f"self.hash_values shape: {self.hash_values[layer_idx].shape}")
+
 
     def update(
         self,
@@ -70,33 +81,51 @@ class KVHashCache(Cache):
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-        # Update the cache
-        if len(self.key_cache) <= layer_idx:
-            # There may be skipped layers, fill them with empty lists
-            for _ in range(len(self.key_cache), layer_idx):
-                self.key_cache.append([])
-                self.value_cache.append([])
-            self.key_cache.append(key_states)
-            self.value_cache.append(value_states)
-        elif len(self.key_cache[layer_idx]) == 0:  # fills previously skipped layers; checking for tensor causes errors
+        # # Update the cache
+        # if len(self.key_cache) <= layer_idx:
+        #     # There may be skipped layers, fill them with empty lists
+        #     for _ in range(len(self.key_cache), layer_idx):
+        #         self.key_cache.append([])
+        #         self.value_cache.append([])
+        #     self.key_cache.append(key_states)
+        #     self.value_cache.append(value_states)
+        # elif len(self.key_cache[layer_idx]) == 0:  # fills previously skipped layers; checking for tensor causes errors
+        #     self.key_cache[layer_idx] = key_states
+        #     self.value_cache[layer_idx] = value_states
+        # else:
+        #     self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+        #     self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+        if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
         else:
             self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
-
+        
+        assert self.key_cache[layer_idx].shape[2] == self.value_cache[layer_idx].shape[2], (
+            f"Mismatch in the sequence length of K and V Cache"
+        )
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
+    
+    def maintain(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int
+    ):
+        pass
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
         # TODO: deprecate this function in favor of `cache_position`
-        is_empty_layer = (
-            len(self.key_cache) == 0  # no cache in any layer
-            or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
-            or len(self.key_cache[layer_idx]) == 0  # the layer has no cache
-        )
-        layer_seq_length = self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
-        return layer_seq_length
+        # is_empty_layer = (
+        #     len(self.key_cache) == 0  # no cache in any layer
+        #     or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
+        #     or len(self.key_cache[layer_idx]) == 0  # the layer has no cache
+        # )
+        # layer_seq_length = self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
+        # return layer_seq_length
+        return None
 
     def get_max_cache_shape(self) -> Optional[int]:
         """Returns the maximum sequence length of the cache object. DynamicCache does not have a maximum length."""

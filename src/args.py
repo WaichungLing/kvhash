@@ -14,5 +14,5 @@ def parse_args():
     parser.add_argument("--enable_kvhash", type=bool, default=True,
                         help="kvhash ratio")
     parser.add_argument("--hash_budget", type=float, default=0.5, help="kv hash budget")
-    parser.add_argument("--num_hash_plane", type=int, default=4, help="number of hash plane")
+    parser.add_argument("--num_planes", type=int, default=4, help="number of division plane")
     return parser.parse_args()
