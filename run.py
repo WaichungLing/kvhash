@@ -58,7 +58,7 @@ def main():
             num_planes=args.num_planes
         ).to(args.device)
 
-    input_text = "Introduce the llama 3.1 model"
+    input_text = "Introduce Llama model"
     max_length = 50
     inputs = tokenizer(
         input_text, 
