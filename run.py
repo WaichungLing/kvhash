@@ -29,7 +29,7 @@ def main():
     )
     if args.enable_kvhash:
         config.enable_kvhash = args.enable_kvhash
-        config.hash_budget = args.hash_budget
+        config.min_eviction_seqlen = args.min_eviction_seqlen
     print(config)
 
     print("Loading model...")
@@ -52,7 +52,10 @@ def main():
     if args.enable_kvhash:
         past_key_value = KVHashCache(
             config,
-            num_planes=args.num_planes    
+            cache_budget = args.cache_budget,
+            sink_protect_tokens = args.sink_protect_tokens,
+            recent_protect_budget = args.recent_protect_budget,
+            num_planes=args.num_planes
         ).to(args.device)
 
     input_text = "Introduce the llama 3.1 model"
