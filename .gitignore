@@ -3,5 +3,4 @@ __pycache__/
 data/
 model/
 *.txt
-env.yml
 config/tokens.py
