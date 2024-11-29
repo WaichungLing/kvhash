@@ -10,6 +10,7 @@ from transformers.models.llama.modeling_llama import (
     apply_rotary_pos_emb
 )
 from transformers.cache_utils import Cache
+from src.kvhash import KVHashCache
 
 def kv_hash_forward(
         self,
@@ -23,7 +24,9 @@ def kv_hash_forward(
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        print("here")
+        
+        # print(f"layer {self.layer_idx} ==== past_key_value {past_key_value.__class__.__name__}")
+
         bsz, q_len, _ = hidden_states.size()
 
         if self.config.pretraining_tp > 1:
@@ -64,7 +67,10 @@ def kv_hash_forward(
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
-        if past_key_value is not None:
+        if self.config.enable_kvhash and past_key_value is not None:
+            past_key_value.update_hash_values(self.layer_idx, key_states)
+
+        if past_key_value is not None: #TODO add not self.config.enable_kvhash and
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
@@ -81,6 +87,11 @@ def kv_hash_forward(
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
+
+        if self.config.enable_kvhash:
+            past_key_value.update_attn_sum(self.layer_idx, attn_weights)
+            if key_states.shape[2] > self.config.min_eviction_seqlen and past_key_value.is_eviction_needed(self.layer_idx):
+                past_key_value.evict(self.layer_idx)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -104,10 +115,10 @@ def kv_hash_forward(
 
         return attn_output, attn_weights, past_key_value
 
-def convert_llama_with_kv_hash(model, config):
+def convert_llama_with_kv_hash(model):
     for name, module in reversed(model._modules.items()):
         if len(list(module.children())) > 0:
-            model._modules[name] = convert_llama_with_kv_hash(module, config)
+            model._modules[name] = convert_llama_with_kv_hash(module)
 
         if isinstance(module, LlamaAttention):
 
