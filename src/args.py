@@ -11,6 +11,7 @@ def parse_args():
                         help="Cache directory for model related configs, weights etc")
     parser.add_argument("--result_dir", type=str, default='./result',
                         help="Result directory that holds experiment output")
+    # kv cache
     parser.add_argument("--enable_kvhash", type=bool, default=True,
                         help="kvhash ratio")
     parser.add_argument("--cache_budget", type=float, default=0.6, help="kv cache budget")
@@ -18,4 +19,6 @@ def parse_args():
     parser.add_argument("--recent_protect_budget", type=int, default=0.01, help="ration of tokens to be protect at the end") # put back 0.01
     parser.add_argument("--min_eviction_seqlen", type=int, default=5, help="sequence length that starts eviction") # put back 2048
     parser.add_argument("--num_planes", type=int, default=4, help="number of division plane")
+    # tasks:
+    parser.add_argument("--task", type=str, default="all", help="evaluation task")
     return parser.parse_args()

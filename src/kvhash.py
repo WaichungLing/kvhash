@@ -14,6 +14,7 @@ class KVHashCache(Cache):
         self.cache_budget = cache_budget
         self.sink_protect_tokens = sink_protect_tokens
         self.recent_protect_budget = recent_protect_budget
+        self.num_planes = num_planes
         self._seen_tokens = 0
 
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
@@ -21,8 +22,8 @@ class KVHashCache(Cache):
 
         self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.div_planes = torch.randn((num_planes, self.config.head_dim))
-        self.powers_of_two = 2 ** torch.arange(num_planes - 1, -1, -1, dtype=torch.int32)
+        self.div_planes = torch.randn((self.num_planes, self.config.head_dim))
+        self.powers_of_two = 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.int32)
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -227,6 +228,14 @@ class KVHashCache(Cache):
         if layer_idx == 0:
             print(f"===== {self.key_cache[layer_idx].shape[2]} -- {self._seen_tokens * self.cache_budget}/{self._seen_tokens}=====")
         return self.key_cache[layer_idx].shape[2] >  self._seen_tokens * self.cache_budget
+    
+    def clear(self):
+        self._seen_tokens = 0
+        self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.div_planes = torch.randn((self.num_planes, self.config.head_dim))
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
