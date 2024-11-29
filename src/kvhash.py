@@ -14,6 +14,7 @@ class KVHashCache(Cache):
         self.cache_budget = cache_budget
         self.sink_protect_tokens = sink_protect_tokens
         self.recent_protect_budget = recent_protect_budget
+        self._seen_tokens = 0
 
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
@@ -77,6 +78,9 @@ class KVHashCache(Cache):
         #     print(f"attn_sum shape: {self.attn_sum[layer_idx].shape}")
 
     def update_hash_values(self, layer_idx, key_states):   # Shape: (b, num_head, q_len, k_len)
+        if layer_idx == 0:
+            self._seen_tokens += key_states.shape[-2]
+
         hash_bits = torch.matmul(key_states, self.div_planes.transpose(-1, -2))
         hash_bits = (hash_bits >= 0).int()
         hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, num_head, s_len)
@@ -124,16 +128,16 @@ class KVHashCache(Cache):
         recent_protect_tokens = int(self.recent_protect_budget * q_len)
         if recent_protect_tokens == 0:
             recent_protect_tokens = 1
-        eviction_protect_tokens = int(self.cache_budget * q_len) - recent_protect_tokens - self.sink_protect_tokens
-        if eviction_protect_tokens <= 0:    # q_len is too small
-            return  
-        evict_tokens = q_len - int(self.cache_budget * q_len)
+        eviction_zone = q_len - recent_protect_tokens - self.sink_protect_tokens  
+        evict_tokens = q_len - int(self.cache_budget * self._seen_tokens)
+        if evict_tokens > eviction_zone:
+            return
         assert evict_tokens > 0, (
             f"the number of tokens need to be evicted should be larger than 0"
         )
 
         if layer_idx == 0:
-            print(f'q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_protect={eviction_protect_tokens}, need evict = {evict_tokens}')
+            print(f'q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}')
 
         if q_len > 1:
             evict_hash = self.hash_values[layer_idx][:,:,self.sink_protect_tokens:-recent_protect_tokens]    # Shape (b, num_heads, qlen)
@@ -179,8 +183,8 @@ class KVHashCache(Cache):
             self.attn_sum[layer_idx] = self.attn_sum[layer_idx].gather(dim=2, index=expanded_indices_hash_attn)
 
             assert self.key_cache[layer_idx].shape[2] == valid_indices.shape[1], "Mismatch in q_len after eviction!"
-            if layer_idx == 0:
-                print(f"After Eviction: key_cache shape {self.key_cache[layer_idx].shape}, value_cache shape {self.value_cache[layer_idx].shape}")
+            # if layer_idx == 0:
+            #     print(f"After Eviction: key_cache shape {self.key_cache[layer_idx].shape}, value_cache shape {self.value_cache[layer_idx].shape}")
             return
                     # if torch.cuda.is_available():
             #     streams = [torch.cuda.Stream() for _ in range(evict_hash.shape[1])]
@@ -218,6 +222,11 @@ class KVHashCache(Cache):
                 start_idx += k
 
         return evict_id_per_head
+    
+    def is_eviction_needed(self, layer_idx):
+        if layer_idx == 0:
+            print(f"===== {self.key_cache[layer_idx].shape[2]} -- {self._seen_tokens * self.cache_budget}/{self._seen_tokens}=====")
+        return self.key_cache[layer_idx].shape[2] >  self._seen_tokens * self.cache_budget
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
