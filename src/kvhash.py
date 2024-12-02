@@ -184,8 +184,8 @@ class KVHashCache(Cache):
             self.attn_sum[layer_idx] = self.attn_sum[layer_idx].gather(dim=2, index=expanded_indices_hash_attn)
 
             assert self.key_cache[layer_idx].shape[2] == valid_indices.shape[1], "Mismatch in q_len after eviction!"
-            if layer_idx == 0:
-                print(f"After Eviction: key_cache shape {self.key_cache[layer_idx].shape}, value_cache shape {self.value_cache[layer_idx].shape}")
+            # if layer_idx == 0:
+            #     print(f"After Eviction: key_cache shape {self.key_cache[layer_idx].shape}, value_cache shape {self.value_cache[layer_idx].shape}")
             return
                     # if torch.cuda.is_available():
             #     streams = [torch.cuda.Stream() for _ in range(evict_hash.shape[1])]
@@ -235,7 +235,6 @@ class KVHashCache(Cache):
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.div_planes = torch.randn((self.num_planes, self.config.head_dim))
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""

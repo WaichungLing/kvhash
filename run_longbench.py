@@ -57,7 +57,7 @@ def post_process(response, model_name):
     return response
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
-    idx = 0
+    idx = 1
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
@@ -79,9 +79,10 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         context_length = input.input_ids.shape[-1]
 
         if context_length > 10000:
+            print(f"===== skipping data[{idx}]")
             continue
-        
-        print(f"===== sample_{idx}, length={context_length}, {prompt[:100]} =====")
+        idx += 1
+
         if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
             output = model.generate(
                 **input,
@@ -98,7 +99,7 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
             )[0]
         pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
         pred = post_process(pred, model_name)
-        print("===== done prediciton ====")
+        print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
         past_key_value.clear()
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
