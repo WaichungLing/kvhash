@@ -88,7 +88,7 @@ if __name__ == '__main__':
             continue
         predictions, answers, lengths = [], [], []
         dataset = filename.split('.')[0]
-        with open(f"{path}{filename}", "r", encoding="utf-8") as f:
+        with open(f"{path}/{filename}", "r", encoding="utf-8") as f:
             for line in f:
                 data = json.loads(line)
                 predictions.append(data["pred"])
