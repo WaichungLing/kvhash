@@ -44,7 +44,7 @@ def main():
     if args.enable_kvhash:
         convert_llama_with_kv_hash(model)
         print("[KVHash] -- replacing llama attention wit KVHash")
-    model.to(args.device)
+    model.eval().to(args.device)
 
     print("Loading everything done")
 
@@ -58,7 +58,7 @@ def main():
             num_planes=args.num_planes
         ).to(args.device)
 
-    input_text = "Introduce Llama model"
+    input_text = "Compare the Llama model and GPT model"
     max_length = 50
     inputs = tokenizer(
         input_text, 
@@ -79,6 +79,8 @@ def main():
     # Print the result
     print(f"\nInput Text: {input_text} -- token: {inputs.input_ids.shape[1]}")
     print("Generated Text:", generated_text)
+
+    past_key_value.clear()
 
 
 if __name__ == "__main__":
