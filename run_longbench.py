@@ -77,6 +77,10 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         else:
             input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
         context_length = input.input_ids.shape[-1]
+
+        if context_length > 10000:
+            continue
+        
         print(f"===== sample_{idx}, length={context_length}, {prompt[:100]} =====")
         if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
             output = model.generate(

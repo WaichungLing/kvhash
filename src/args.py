@@ -22,5 +22,5 @@ def parse_args():
     parser.add_argument("--min_eviction_seqlen", type=int, default=5, help="sequence length that starts eviction") # put back 2048
     parser.add_argument("--num_planes", type=int, default=4, help="number of division plane")
     # tasks:
-    parser.add_argument("--task", type=str, default="all", help="evaluation task")
+    parser.add_argument("--task", type=str, default="multi_news", help="evaluation task")
     return parser.parse_args()
