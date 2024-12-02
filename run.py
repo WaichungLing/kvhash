@@ -37,7 +37,7 @@ def main():
         args.model_name, 
         config=config,
         cache_dir = args.cache_dir,
-        attn_implementation="eager",
+        attn_implementation="flash_attention_2",
         token=tokens.HF_TOKEN
     )
 
