@@ -22,8 +22,8 @@ class KVHashCache(Cache):
 
         self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.div_planes = torch.randn((self.num_planes, self.config.head_dim))
-        self.powers_of_two = 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.int32)
+        self.register_buffer("div_planes", torch.randn((self.num_planes, self.config.head_dim), dtype=torch.float32))
+        self.register_buffer("powers_of_two", 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.float32))
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -83,7 +83,7 @@ class KVHashCache(Cache):
             self._seen_tokens += key_states.shape[-2]
 
         hash_bits = torch.matmul(key_states, self.div_planes.transpose(-1, -2))
-        hash_bits = (hash_bits >= 0).int()
+        hash_bits = (hash_bits >= 0).to(torch.float32)
         hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, num_head, s_len)
         # if layer_idx == 0:
         #     print(f"======= hash_bits shape {hash_bits.shape} === {hash_bits[:,0,:,:]}")
@@ -137,8 +137,8 @@ class KVHashCache(Cache):
             f"the number of tokens need to be evicted should be larger than 0"
         )
 
-        if layer_idx == 0:
-            print(f'q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}')
+        # if layer_idx == 0:
+        #     print(f'q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}')
 
         if q_len > 1:
             evict_hash = self.hash_values[layer_idx][:,:,self.sink_protect_tokens:-recent_protect_tokens]    # Shape (b, num_heads, qlen)
@@ -184,8 +184,8 @@ class KVHashCache(Cache):
             self.attn_sum[layer_idx] = self.attn_sum[layer_idx].gather(dim=2, index=expanded_indices_hash_attn)
 
             assert self.key_cache[layer_idx].shape[2] == valid_indices.shape[1], "Mismatch in q_len after eviction!"
-            # if layer_idx == 0:
-            #     print(f"After Eviction: key_cache shape {self.key_cache[layer_idx].shape}, value_cache shape {self.value_cache[layer_idx].shape}")
+            if layer_idx == 0:
+                print(f"After Eviction: key_cache shape {self.key_cache[layer_idx].shape}, value_cache shape {self.value_cache[layer_idx].shape}")
             return
                     # if torch.cuda.is_available():
             #     streams = [torch.cuda.Stream() for _ in range(evict_hash.shape[1])]
@@ -225,8 +225,8 @@ class KVHashCache(Cache):
         return evict_id_per_head
     
     def is_eviction_needed(self, layer_idx):
-        if layer_idx == 0:
-            print(f"===== {self.key_cache[layer_idx].shape[2]} -- {self._seen_tokens * self.cache_budget}/{self._seen_tokens}=====")
+        # if layer_idx == 0:
+        #     print(f"===== {self.key_cache[layer_idx].shape[2]} -- {self._seen_tokens * self.cache_budget}/{self._seen_tokens}=====")
         return self.key_cache[layer_idx].shape[2] >  self._seen_tokens * self.cache_budget
     
     def clear(self):

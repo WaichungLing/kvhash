@@ -7,9 +7,11 @@ def parse_args():
                         help="The Hugging Face model name to load.")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device to run the model on (cuda or cpu).")
-    parser.add_argument("--cache_dir", type=str, default='./model',
+    parser.add_argument("--cache_dir", type=str, default='model',
                         help="Cache directory for model related configs, weights etc")
-    parser.add_argument("--result_dir", type=str, default='./result',
+    parser.add_argument("--data_dir", type=str, default='data',
+                        help="Cache directory for dataset etc")
+    parser.add_argument("--pred_dir", type=str, default='pred',
                         help="Result directory that holds experiment output")
     # kv cache
     parser.add_argument("--enable_kvhash", type=bool, default=True,
