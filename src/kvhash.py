@@ -243,3 +243,9 @@ class KVHashCache(Cache):
     def get_max_cache_shape(self) -> Optional[int]:
         """Returns the maximum sequence length of the cache object. DynamicCache does not have a maximum length."""
         return None
+    
+    def evict_h2o(
+        self,
+        layer_idx: int
+    ):
+        pass

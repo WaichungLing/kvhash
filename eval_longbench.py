@@ -124,4 +124,3 @@ if __name__ == "__main__":
         out_path = f"pred/{args.model}/result.json"
     with open(out_path, "w") as f:
         json.dump(scores, f, ensure_ascii=False, indent=4)
-
