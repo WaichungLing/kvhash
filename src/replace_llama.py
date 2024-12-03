@@ -67,8 +67,8 @@ def kv_hash_forward(
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
-        if self.config.enable_kvhash and past_key_value is not None:
-            past_key_value.update_hash_values(self.layer_idx, key_states)
+        # if self.config.enable_kvhash and past_key_value is not None:
+        #     past_key_value.update_hash_values(self.layer_idx, key_states)
 
         if past_key_value is not None: #TODO add not self.config.enable_kvhash and
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -91,7 +91,7 @@ def kv_hash_forward(
         if self.config.enable_kvhash:
             past_key_value.update_attn_sum(self.layer_idx, attn_weights)
             if key_states.shape[2] > self.config.min_eviction_seqlen and past_key_value.is_eviction_needed(self.layer_idx):
-                past_key_value.evict(self.layer_idx)
+                past_key_value.evict(query_states, self.layer_idx)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(

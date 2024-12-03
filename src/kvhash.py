@@ -1,6 +1,8 @@
 import torch
+import math
 from typing import Any, Dict, List, Optional, Tuple
 from transformers.cache_utils import Cache
+from transformers.models.llama.modeling_llama import repeat_kv
 
 class KVHashCache(Cache):
     def __init__(self, 
@@ -22,7 +24,7 @@ class KVHashCache(Cache):
 
         self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.register_buffer("div_planes", torch.randn((self.num_planes, self.config.head_dim), dtype=torch.float32))
+        self.register_buffer("div_planes", torch.empty(0))
         self.register_buffer("powers_of_two", 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.float32))
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
@@ -78,11 +80,8 @@ class KVHashCache(Cache):
         # if layer_idx == 0 and self.attn_sum[layer_idx] is not None:
         #     print(f"attn_sum shape: {self.attn_sum[layer_idx].shape}")
 
-    def update_hash_values(self, layer_idx, key_states):   # Shape: (b, num_head, q_len, k_len)
-        if layer_idx == 0:
-            self._seen_tokens += key_states.shape[-2]
-
-        hash_bits = torch.matmul(key_states, self.div_planes.transpose(-1, -2))
+    def update_hash_values(self, layer_idx, key_states, q_len):   # Shape: (b, num_head, q_len, k_len)
+        hash_bits = torch.matmul(key_states[:,:,-q_len:,:], self.div_planes.transpose(-1, -2))
         hash_bits = (hash_bits >= 0).to(torch.float32)
         hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, num_head, s_len)
         # if layer_idx == 0:
@@ -93,7 +92,7 @@ class KVHashCache(Cache):
             # Initialize hash_values if it is None
             self.hash_values[layer_idx] = hash_vals
         else:
-            q_len = key_states.shape[2]
+            # q_len = key_states.shape[2]
             self.hash_values[layer_idx] = torch.cat([self.hash_values[layer_idx], hash_vals[:, :, -q_len:]], dim=2)
             # if layer_idx == 0:
             #     print(f'====== self.hash_values shape {self.hash_values[layer_idx].shape} === {self.hash_values[layer_idx]}')
@@ -105,6 +104,8 @@ class KVHashCache(Cache):
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if layer_idx == 0:
+            self._seen_tokens += key_states.shape[-2]
         
         if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:
             self.key_cache[layer_idx] = key_states
@@ -120,11 +121,42 @@ class KVHashCache(Cache):
 
     def evict(
         self,
+        query_states,
         layer_idx: int
     ):
-        assert self.hash_values[layer_idx].shape == self.attn_sum[layer_idx].shape, (
-            f"Dimension of hash_values {self.hash_values[layer_idx].shape} and attn_sum {self.attn_sum[layer_idx].shape} does not match"
-        )
+        # assert self.hash_values[layer_idx].shape == self.attn_sum[layer_idx].shape, (
+        #     f"Dimension of hash_values {self.hash_values[layer_idx].shape} and attn_sum {self.attn_sum[layer_idx].shape} does not match"
+        # )
+
+        # generate div plane from top K attn_score
+        if self.div_planes.numel() == 0:
+            key_to_mul = repeat_kv(self.key_cache[layer_idx], self.config.num_attention_heads//self.config.num_key_value_heads)
+            attn_weights = torch.matmul(query_states[:,:,-5:,:], key_to_mul.transpose(2, 3)) / math.sqrt(self.config.head_dim)
+            summation = torch.sum(attn_weights, dim=2)
+            n_per_group = self.config.num_attention_heads // self.config.num_key_value_heads
+            if n_per_group > 1:
+                temp = summation.view(summation.shape[0], self.config.num_key_value_heads, n_per_group, -1)
+                summation = temp.sum(dim=2)
+            # if layer_idx == 0:
+            #     print(f"=== {summation.shape}")
+            #     print(f"==== {summation}")
+            _, top_indices = torch.topk(summation, k=self.num_planes, dim=-1)
+            # if layer_idx == 0:
+            #     print(f"==== {top_indices.shape}")
+            #     print(f"==== {top_indices[:,0,:]}")
+            top_indices_expanded = top_indices.unsqueeze(-1).expand(-1, -1, -1, self.config.head_dim)
+            self.div_planes = torch.gather(self.key_cache[layer_idx], dim=2, index=top_indices_expanded)
+            # if layer_idx == 0:
+            #     print(f"==={self.div_planes.shape}")
+            #     print(f'=== {self.key_cache[layer_idx][:,0,:,:]}')
+            #     print(f'=== {self.div_planes[:,0,:,:]}')
+        self.update_hash_values(layer_idx, self.key_cache[layer_idx], query_states.shape[-2])
+        # if layer_idx == 0:
+        #     print(f'===hash_shape {self.hash_values[layer_idx].shape}')
+        #     print(f'===attn_sum_shape {self.attn_sum[layer_idx].shape}')
+        #     print(f'===key_cache shape {self.key_cache[layer_idx].shape}')
+        #     print(f'===value_cache shape {self.value_cache[layer_idx].shape}')
+
         q_len = self.key_cache[layer_idx].shape[2]
         recent_protect_tokens = int(self.recent_protect_budget * q_len)
         if recent_protect_tokens == 0:
@@ -133,12 +165,11 @@ class KVHashCache(Cache):
         evict_tokens = q_len - int(self.cache_budget * self._seen_tokens)
         if evict_tokens > eviction_zone:
             return
+        # if layer_idx == 0:
+        #     print(f'q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}')
         assert evict_tokens > 0, (
             f"the number of tokens need to be evicted should be larger than 0"
         )
-
-        # if layer_idx == 0:
-        #     print(f'q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}')
 
         if q_len > 1:
             evict_hash = self.hash_values[layer_idx][:,:,self.sink_protect_tokens:-recent_protect_tokens]    # Shape (b, num_heads, qlen)
@@ -235,6 +266,7 @@ class KVHashCache(Cache):
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.div_planes = torch.empty(0, device=self.div_planes.device)
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
