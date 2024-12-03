@@ -91,15 +91,23 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
             )[0]
         else:
-            output = model.generate(
-                **input,
-                max_new_tokens=max_gen,
-                use_cache=True,
-                past_key_values = past_key_value
-            )[0]
+            if past_key_value == None:
+                output = model.generate(
+                    **input,
+                    max_new_tokens=max_gen,
+                    use_cache=True
+                )[0]
+            else:
+                output = model.generate(
+                    **input,
+                    max_new_tokens=max_gen,
+                    use_cache=True,
+                    past_key_values = past_key_value
+                )[0]
         pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
         pred = post_process(pred, model_name)
-        print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
+        if past_key_value is not None:
+            print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
         past_key_value.clear()
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
@@ -155,7 +163,7 @@ def main():
 
     print("Loading everything done")
 
-    past_key_value = DynamicCache().to(args.device)
+    past_key_value = None
     if args.enable_kvhash:
         past_key_value = KVHashCache(
             config,
