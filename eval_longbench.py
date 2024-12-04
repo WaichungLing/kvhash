@@ -47,6 +47,9 @@ def parse_args(args=None):
     parser.add_argument(
         "--dir", type=str, default="pred", help="Directory to save predictions"
     )
+    parser.add_argument(
+        "--cache_budget", type=float, default=0.2, help="Cache budget for Long"
+    )
     return parser.parse_args(args)
 
 
@@ -95,9 +98,9 @@ if __name__ == "__main__":
     args = parse_args()
     scores = dict()
     if args.e:
-        path = f"pred_e/{args.model}/"
+        path = f"pred_e/{args.model}-{args.cache_budget}/"
     else:
-        path = f"pred/{args.model}/"
+        path = f"pred/{args.model}-{args.cache_budget}/"
     all_files = os.listdir(path)
     print("Evaluating on:", all_files)
     for filename in all_files:
@@ -119,8 +122,8 @@ if __name__ == "__main__":
             score = scorer(dataset, predictions, answers, all_classes)
         scores[dataset] = score
     if args.e:
-        out_path = f"pred_e/{args.model}/result.json"
+        out_path = f"pred_e/{args.model}-{args.cache_budget}/result.json"
     else:
-        out_path = f"pred/{args.model}/result.json"
+        out_path = f"pred/{args.model}-{args.cache_budget}/result.json"
     with open(out_path, "w") as f:
         json.dump(scores, f, ensure_ascii=False, indent=4)
