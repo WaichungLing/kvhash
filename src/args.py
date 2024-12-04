@@ -11,7 +11,7 @@ def parse_args():
                         help="Cache directory for model related configs, weights etc")
     parser.add_argument("--result_dir", type=str, default='./result',
                         help="Result directory that holds experiment output")
-    parser.add_argument("--enable_kvhash", type=bool, default=False,
+    parser.add_argument("--enable_kvhash", type=bool, default=True,
                         help="kvhash ratio")
     parser.add_argument("--cache_budget", type=float, default=0.6, help="kv cache budget")
     parser.add_argument("--sink_protect_tokens", type=int, default=1, help="number of tokens to be protect at the head") # put back 256

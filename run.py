@@ -11,6 +11,7 @@ def main():
     torch.manual_seed(42)
 
     args = parse_args()
+    print(args)
 
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -44,19 +45,19 @@ def main():
     if args.enable_kvhash:
         convert_llama_with_kv_hash(model)
         print("[KVHash] -- replacing llama attention wit KVHash")
-    model.eval().to(args.device)
+    model.to(dtype=torch.bfloat16).to('cuda').eval()
 
     print("Loading everything done")
 
     past_key_value = DynamicCache().to(args.device)
-    if args.enable_kvhash:
-        past_key_value = KVHashCache(
-            config,
-            cache_budget = args.cache_budget,
-            sink_protect_tokens = args.sink_protect_tokens,
-            recent_protect_budget = args.recent_protect_budget,
-            num_planes=args.num_planes
-        ).to(args.device)
+    # if args.enable_kvhash:
+    #     past_key_value = KVHashCache(
+    #         config,
+    #         cache_budget = args.cache_budget,
+    #         sink_protect_tokens = args.sink_protect_tokens,
+    #         recent_protect_budget = args.recent_protect_budget,
+    #         num_planes=args.num_planes
+    #     ).to(args.device)
 
     input_text = "Compare the Llama model and GPT model"
     max_length = 50
@@ -80,7 +81,7 @@ def main():
     print(f"\nInput Text: {input_text} -- token: {inputs.input_ids.shape[1]}")
     print("Generated Text:", generated_text)
 
-    past_key_value.clear()
+    # past_key_value.clear()
 
 
 if __name__ == "__main__":
