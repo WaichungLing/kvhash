@@ -80,8 +80,8 @@ class KVHashCache(Cache):
     #     # if layer_idx == 0 and self.attn_sum[layer_idx] is not None:
     #     #     print(f"attn_sum shape: {self.attn_sum[layer_idx].shape}")
 
-    def update_hash_values(self, layer_idx, key_states):   # Shape: (b, num_head, q_len, k_len)
-        hash_bits = torch.matmul(key_states, self.div_planes.transpose(-1, -2))
+    def update_hash_values(self, layer_idx, key_states, q_len):   # Shape: (b, num_head, q_len, k_len)
+        hash_bits = torch.matmul(key_states[:,:,-q_len:,:], self.div_planes.transpose(-1, -2))
         hash_bits = (hash_bits >= 0).to(torch.float32)
         hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, num_head, s_len)
         # if layer_idx == 0:
@@ -92,7 +92,7 @@ class KVHashCache(Cache):
             # Initialize hash_values if it is None
             self.hash_values[layer_idx] = hash_vals
         else:
-            q_len = key_states.shape[2]
+            # q_len = key_states.shape[2]
             self.hash_values[layer_idx] = torch.cat([self.hash_values[layer_idx], hash_vals[:, :, -q_len:]], dim=2)
             # if layer_idx == 0:
             #     print(f'====== self.hash_values shape {self.hash_values[layer_idx].shape} === {self.hash_values[layer_idx]}')
@@ -118,10 +118,6 @@ class KVHashCache(Cache):
         assert self.key_cache[layer_idx].shape[2] == self.value_cache[layer_idx].shape[2], (
             f"Mismatch in the sequence length of K and V Cache"
         )
-
-        # do kv cache eviction before actually using flash attn for output
-        if self.key_cache[layer_idx].shape[2] > self.config.min_eviction_seqlen and self.is_eviction_needed(layer_idx):
-            self.evict(layer_idx, query_states)
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
     def evict(
@@ -132,7 +128,7 @@ class KVHashCache(Cache):
         if query_states.shape[-2] == 1: # skip autoregressive
             return
         
-        self.update_hash_values(layer_idx, self.key_cache[layer_idx])
+        self.update_hash_values(layer_idx, self.key_cache[layer_idx], query_states.shape[-2])
 
         q_len = self.key_cache[layer_idx].shape[2]
         recent_protect_tokens = int(self.recent_protect_budget * q_len)

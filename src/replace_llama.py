@@ -115,6 +115,10 @@ def my_forward(
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)
 
+        if past_key_value.key_cache[self.layer_idx].shape[2] > self.config.min_eviction_seqlen and past_key_value.is_eviction_needed(self.layer_idx):
+            query_states = query_states.transpose(1, 2)
+            past_key_value.evict(self.layer_idx, query_states)
+
         if not output_attentions:
             attn_weights = None
 
