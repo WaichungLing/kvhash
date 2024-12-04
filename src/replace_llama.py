@@ -63,7 +63,7 @@ def my_forward(
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(key_states, value_states, query_states, self.layer_idx, cache_kwargs)
 
         # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache
         # to be able to avoid many of these transpose/reshape/view.
@@ -126,7 +126,6 @@ def convert_llama_with_kv_hash(model):
             model._modules[name] = convert_llama_with_kv_hash(module)
 
         if isinstance(module, LlamaFlashAttention2):
-            print("hitted")
             def custom_forward(*args, **kwargs):
                 return my_forward(module, *args, **kwargs)
             

@@ -78,10 +78,10 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
             input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
         context_length = input.input_ids.shape[-1]
 
-        if context_length > 10000:
-            print(f"===== skipping data[{idx}]")
-            continue
-        idx += 1
+        # if context_length > 10000:
+        #     print(f"===== skipping data[{idx}]")
+        #     continue
+        # idx += 1
 
         if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
             output = model.generate(
@@ -95,7 +95,7 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                 output = model.generate(
                     **input,
                     max_new_tokens=max_gen,
-                    use_cache=True
+                    use_cache=True,
                 )[0]
             else:
                 output = model.generate(
@@ -152,14 +152,14 @@ def main():
         args.model_name, 
         config=config,
         cache_dir = args.cache_dir,
-        attn_implementation="eager",
+        attn_implementation="flash_attention_2",
         token=tokens.HF_TOKEN
     )
 
     if args.enable_kvhash:
         convert_llama_with_kv_hash(model)
         print("[KVHash] -- replacing llama attention wit KVHash")
-    model.eval().to(args.device)
+    model.to(dtype=torch.bfloat16).to(args.device).eval()
 
     print("Loading everything done")
 
