@@ -1,5 +1,6 @@
 import torch
 import math
+import numpy as np
 from typing import Any, Dict, List, Optional, Tuple
 from transformers.cache_utils import Cache
 from transformers.models.llama.modeling_llama import repeat_kv
@@ -96,6 +97,30 @@ class KVHashCache(Cache):
             self.hash_values[layer_idx] = torch.cat([self.hash_values[layer_idx], hash_vals[:, :, -q_len:]], dim=2)
             # if layer_idx == 0:
             #     print(f'====== self.hash_values shape {self.hash_values[layer_idx].shape} === {self.hash_values[layer_idx]}')
+    
+    def proxy_token_selection(self, query_states, k = 128, tail = 128):
+        hash_bits = torch.matmul(query_states, self.div_planes.transpose(-1, -2))
+        hash_bits = (hash_bits >= 0).to(torch.float32)
+        hash_vals = torch.matmul(hash_bits, self.powers_of_two) # shape (b, num_head, qlen)
+        
+        b, num_head, qlen, hidden_d = query_states.shape
+
+        reshaped_hash_vals = hash_vals.view(-1, hash_vals.shape[-1])  # Shape: (b * num_head, qlen)
+        range_limit = qlen - tail
+        reshaped_hash_vals = hash_vals[:, :, :range_limit].reshape(-1, range_limit)
+        sampled_indices = torch.empty((reshaped_hash_vals.shape[0], k), dtype=torch.long)
+        for row_idx, row in enumerate(reshaped_hash_vals):
+            unique_vals, counts = torch.unique(row, return_counts=True)
+            probabilities = counts.float() / counts.sum()
+
+            sampled_vals = torch.multinomial(probabilities, k, replacement=True)
+            all_indices = torch.nonzero(row.unsqueeze(0) == unique_vals[sampled_vals].unsqueeze(1), as_tuple=False)[:, 1]
+            shuffled_indices = all_indices[torch.randperm(all_indices.size(0))]
+            sampled_indices[row_idx, :] = shuffled_indices[:k]
+        sampled_indices = sampled_indices.view(b, num_head, k) # (b, num_head, k)
+        tail_indices = torch.arange(range_limit, qlen).expand(b, num_head, tail)    # (b, num_head, tail)
+        proxy_indices = torch.cat([sampled_indices, tail_indices], dim=-1).unsqueeze(-1).expand(-1, -1, -1, hidden_d)    # (b, num_head, tail+k, hidden_d)
+        return proxy_indices
 
     def update(
         self,
@@ -145,9 +170,13 @@ class KVHashCache(Cache):
         if layer_idx == 0:
             print(f'q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}')
 
+        # proxy token selection
+        proxy_indices = self.proxy_token_selection(query_states)     # (b, num_head, tail+k, hidden_d)
+
         # calculate proxy attention scores
         key_to_mul = repeat_kv(self.key_cache[layer_idx], self.config.num_attention_heads//self.config.num_key_value_heads)
-        attn_weights = torch.matmul(query_states[:,:,-100:,:], key_to_mul.transpose(2, 3)) / math.sqrt(self.config.head_dim)
+        proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)
+        attn_weights = torch.matmul(proxy_query_states, key_to_mul.transpose(2, 3)) / math.sqrt(self.config.head_dim)
         summation = torch.sum(attn_weights, dim=2)
         n_per_group = self.config.num_attention_heads // self.config.num_key_value_heads
         if n_per_group > 1:
@@ -155,19 +184,20 @@ class KVHashCache(Cache):
             summation = temp.sum(dim=2)
 
         evict_hash = self.hash_values[layer_idx][:,:,self.sink_protect_tokens:-recent_protect_tokens]    # Shape (b, num_heads, qlen)
-        evict_attn = summation[:,:,self.sink_protect_tokens:-recent_protect_tokens]       # Shape (b, num_heads, qlen)
-
-        evict_ids = []
+        evict_attn = summation[:,:,self.sink_protect_tokens:-recent_protect_tokens]                      # Shape (b, num_heads, qlen)
+        evict_ids = []                                                                                   # Pure two d array, [[head1], [head2], ...]
         for i in range(self.config.num_key_value_heads):
             evict_id_per_head = self.head_eviction(evict_hash, evict_attn, i, evict_tokens)
-            evict_id_per_head += self.sink_protect_tokens
+            evict_id_per_head += self.sink_protect_tokens                                                # evict_hash and evict_attn trimmed by sink_protect_tokens
             evict_ids.append(evict_id_per_head)
 
+        # align eviction length
         min_evict_tokens = min(len(evict_id_per_head) for evict_id_per_head in evict_ids)
         aligned_evict_ids = torch.stack([
             evict_id_per_head[:min_evict_tokens] for evict_id_per_head in evict_ids
         ])
 
+        # convert eviction idx to keep idx
         keep_indices = torch.ones(
             (self.config.num_key_value_heads, q_len), 
             dtype=torch.bool, 
@@ -178,13 +208,13 @@ class KVHashCache(Cache):
             keep_indices
         ).view(self.config.num_key_value_heads, -1)
 
+        # house keeping (key_cache, value_cache, hash_values)
         expanded_indices = valid_indices.unsqueeze(0).unsqueeze(-1).expand(
             self.key_cache[layer_idx].shape[0],  # batch_size
             self.key_cache[layer_idx].shape[1],  # num_heads
             -1,                                 # new_q_len
             self.key_cache[layer_idx].shape[-1] # k_len
         )
-
         self.key_cache[layer_idx] = self.key_cache[layer_idx].gather(dim=2, index=expanded_indices)
         self.value_cache[layer_idx] = self.value_cache[layer_idx].gather(dim=2, index=expanded_indices)
 
@@ -196,9 +226,7 @@ class KVHashCache(Cache):
         self.hash_values[layer_idx] = self.hash_values[layer_idx].gather(dim=2, index=expanded_indices_hash_attn)
 
         assert self.key_cache[layer_idx].shape[2] == valid_indices.shape[1], "Mismatch in q_len after eviction!"
-        # if layer_idx == 0:
-            #     print(f"After Eviction: key_cache shape {self.key_cache[layer_idx].shape}, value_cache shape {self.value_cache[layer_idx].shape}")
-        
+
     def head_eviction(self, hash, attn, head_idx, evict_num):
         unique_values, inverse_indices, counts = torch.unique(
             hash[:, head_idx, :], return_inverse=True, return_counts=True
