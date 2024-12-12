@@ -122,7 +122,6 @@ class KVHashCache(Cache):
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
-        query_states: torch.Tensor,
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -258,7 +257,7 @@ class KVHashCache(Cache):
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
-        return None
+        return 0
 
     def get_max_cache_shape(self) -> Optional[int]:
         """Returns the maximum sequence length of the cache object. DynamicCache does not have a maximum length."""
