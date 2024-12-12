@@ -10,6 +10,7 @@ from src.replace_llama import convert_llama_with_kv_hash
 from src.kvhash import KVHashCache
 from config import tokens
 from datasets import load_dataset
+import logging
 
 LONGBENCH_TASKS = [
     "narrativeqa",
@@ -62,10 +63,7 @@ def build_chat(tokenizer, prompt, model_name):
     elif "llama2" in model_name:
         prompt = f"[INST]{prompt}[/INST]"
     elif "xgen" in model_name:
-        header = (
-            "A chat between a curious human and an artificial intelligence assistant. "
-            "The assistant gives helpful, detailed, and polite answers to the human's questions.\n\n"
-        )
+        header = "A chat between a curious human and an artificial intelligence assistant. " "The assistant gives helpful, detailed, and polite answers to the human's questions.\n\n"
         prompt = header + f" ### Human: {prompt}\n###"
     elif "internlm" in model_name:
         prompt = f"<|User|>:{prompt}<eoh>\n<|Bot|>:"
@@ -96,18 +94,12 @@ def get_pred(
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
-        tokenized_prompt = tokenizer(
-            prompt, truncation=False, return_tensors="pt"
-        ).input_ids[0]
+        tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt").input_ids[0]
         if "chatglm3" in model_name:
-            tokenized_prompt = tokenizer(
-                prompt, truncation=False, return_tensors="pt", add_special_tokens=False
-            ).input_ids[0]
+            tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt", add_special_tokens=False).input_ids[0]
         if len(tokenized_prompt) > MAX_CONTEXT:
             half = int(MAX_CONTEXT / 2)
-            prompt = tokenizer.decode(
-                tokenized_prompt[:half], skip_special_tokens=True
-            ) + tokenizer.decode(tokenized_prompt[-half:], skip_special_tokens=True)
+            prompt = tokenizer.decode(tokenized_prompt[:half], skip_special_tokens=True) + tokenizer.decode(tokenized_prompt[-half:], skip_special_tokens=True)
         if dataset not in [
             "trec",
             "triviaqa",
@@ -119,9 +111,7 @@ def get_pred(
             prompt = build_chat(tokenizer, prompt, model_name)
         if "chatglm3" in model_name:
             if dataset in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench-p"]:
-                input = tokenizer(prompt, truncation=False, return_tensors="pt").to(
-                    device
-                )
+                input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
             else:
                 input = prompt.to(device)
         else:
@@ -133,9 +123,7 @@ def get_pred(
             continue
         idx += 1
 
-        if (
-            dataset == "samsum"
-        ):  # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
+        if dataset == "samsum":  # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
             output = model.generate(
                 **input,
                 max_new_tokens=max_gen,
@@ -184,16 +172,12 @@ def main():
         os.makedirs(args.data_dir)
 
     print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name, cache_dir=args.cache_dir, token=tokens.HF_TOKEN
-    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, cache_dir=args.cache_dir, token=tokens.HF_TOKEN)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     print("Loading config...")
-    config = AutoConfig.from_pretrained(
-        args.model_name, cache_dir=args.cache_dir, token=tokens.HF_TOKEN
-    )
+    config = AutoConfig.from_pretrained(args.model_name, cache_dir=args.cache_dir, token=tokens.HF_TOKEN)
     if args.enable_kvhash:
         config.enable_kvhash = args.enable_kvhash
         config.min_eviction_seqlen = args.min_eviction_seqlen
@@ -241,16 +225,10 @@ def main():
         max_gen = dataset2maxlen[dataset]
         if not os.path.exists(f"{args.pred_dir}/{args.model_name}-{args.cache_budget}"):
             os.makedirs(f"{args.pred_dir}/{args.model_name}-{args.cache_budget}")
-        out_path = (
-            f"{args.pred_dir}/{args.model_name}-{args.cache_budget}/{dataset}.jsonl"
-        )
+        out_path = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}/{dataset}.jsonl"
 
-        print(
-            f"Prepareing dataset {dataset}, max_gen = {max_gen}, out_path = {out_path}"
-        )
-        data = load_dataset(
-            "THUDM/LongBench", dataset, split="test", cache_dir=args.data_dir
-        )
+        print(f"Prepareing dataset {dataset}, max_gen = {max_gen}, out_path = {out_path}")
+        data = load_dataset("THUDM/LongBench", dataset, split="test", cache_dir=args.data_dir)
         print("Load dataset done")
 
         get_pred(
@@ -290,4 +268,12 @@ def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.DEBUG,  # Set the logging level to INFO
+        format="%(asctime)s [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s",  # Log format with timestamp, level, and message
+        handlers=[
+            logging.StreamHandler(),  # Log to console
+            logging.FileHandler("longbench.log"),  # Log to file
+        ],
+    )
     main()
