@@ -20,10 +20,10 @@ class KVHashCache(Cache):
         self._seen_tokens = 0
         self.num_planes = num_planes
 
-        self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers     # [(batch, num_head, qlen, hidden)] * layer
+        self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # [(batch, num_head, qlen, hidden)] * layer
 
-        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # [(batch, num_head, qlen)] * layer
         # self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.register_buffer("div_planes", torch.randn((self.num_planes, self.config.head_dim), dtype=torch.bfloat16))
         self.register_buffer("powers_of_two", 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.float32))
@@ -155,6 +155,7 @@ class KVHashCache(Cache):
         
         self.update_hash_values(layer_idx, self.key_cache[layer_idx], query_states.shape[-2])
 
+        # compute budgets
         q_len = self.key_cache[layer_idx].shape[2]
         recent_protect_tokens = int(self.recent_protect_budget * q_len)
         if recent_protect_tokens == 0:
@@ -163,6 +164,8 @@ class KVHashCache(Cache):
         evict_tokens = q_len - int(self.cache_budget * self._seen_tokens)
         if evict_tokens > eviction_zone:
             return
+        if evict_tokens == 0:
+            return
         assert evict_tokens > 0, (
             f"the number of tokens need to be evicted should be larger than 0"
         )
@@ -170,7 +173,8 @@ class KVHashCache(Cache):
         if layer_idx == 0:
             print(f'q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}')
 
-        # proxy token selection
+        # proxy token selection 
+        # TODO PCA implementation
         proxy_indices = self.proxy_token_selection(query_states)     # (b, num_head, tail+k, hidden_d)
 
         # calculate proxy attention scores
@@ -181,13 +185,16 @@ class KVHashCache(Cache):
         n_per_group = self.config.num_attention_heads // self.config.num_key_value_heads
         if n_per_group > 1:
             temp = summation.view(summation.shape[0], self.config.num_key_value_heads, n_per_group, -1)
-            summation = temp.sum(dim=2)
+            summation = temp.sum(dim=2)     # summation shape = (b, 8, qlen)
 
         evict_hash = self.hash_values[layer_idx][:,:,self.sink_protect_tokens:-recent_protect_tokens]    # Shape (b, num_heads, qlen)
         evict_attn = summation[:,:,self.sink_protect_tokens:-recent_protect_tokens]                      # Shape (b, num_heads, qlen)
         evict_ids = []                                                                                   # Pure two d array, [[head1], [head2], ...]
         for i in range(self.config.num_key_value_heads):
-            evict_id_per_head = self.head_eviction(evict_hash, evict_attn, i, evict_tokens)
+            # head_eviction: random plane
+            # head_eviction_topk: h2o implementation
+            # pca_selection: can be used to directly select k cache
+            evict_id_per_head = self.head_eviction(evict_hash, evict_attn, i, evict_tokens)              
             evict_id_per_head += self.sink_protect_tokens                                                # evict_hash and evict_attn trimmed by sink_protect_tokens
             evict_ids.append(evict_id_per_head)
 
@@ -275,8 +282,22 @@ class KVHashCache(Cache):
         """Returns the maximum sequence length of the cache object. DynamicCache does not have a maximum length."""
         return None
     
-    def evict_h2o(
-        self,
-        layer_idx: int
-    ):
-        pass
+    def head_eviction_topk(self, hash, attn, head_idx, evict_num):
+        # return eviction id purely based on attention sum, no hash involves
+        _, indices = torch.topk(attn[:, head_idx, :], evict_num, largest=False)    # TODO: I think the return indices here needs to be reshape. Need GPT
+        return indices
+    
+    def pca_selection(self, k, head_idx, evict_num):
+        # This function serves as a pca-informed indices selection
+        # for Q,K,V matrices like (bsz, num_head, q_len, hidden_d), this function use pca of hidden_d to inform most informative
+        # tokens on dim = -2
+        # TODO fix dimemsion
+        bsz, num_head, q_len, hidden_d = self.key_cache[head_idx].shape
+        row_covariance = torch.matmul(self.key_cache[head_idx].transpose(-1, -2), self.key_cache[head_idx]) / q_len
+        U, S, V = torch.linalg.svd(row_covariance, full_matrices=False)
+        top_PCs = U[:, :k]      # (128k, k)
+        projected_k_cache = torch.matmul(top_PCs.T, self.key_cache[head_idx]) # (k, 128k)@(128k, 128) -> (bsz, num_head, k, q_len)
+
+        column_sum = torch.sum(projected_k_cache, dim=2) # (bsz, num_head, q_len)
+        _, indicees = torch.topk(column_sum, evict_num)
+        return indicees
