@@ -39,18 +39,20 @@ dataset2metric = {
     "repobench-p": code_sim_score,
 }
 
+
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default="meta-llama/Llama-3.2-1B-Instruct")
-    parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
+    parser.add_argument("--model", type=str, default="meta-llama/Llama-3.2-1B-Instruct")
+    parser.add_argument("--e", action="store_true", help="Evaluate on LongBench-E")
     return parser.parse_args(args)
+
 
 def scorer_e(dataset, predictions, answers, lengths, all_classes):
     scores = {"0-4k": [], "4-8k": [], "8k+": []}
-    for (prediction, ground_truths, length) in zip(predictions, answers, lengths):
-        score = 0.
+    for prediction, ground_truths, length in zip(predictions, answers, lengths):
+        score = 0.0
         if dataset in ["trec", "triviaqa", "samsum", "lsht"]:
-            prediction = prediction.lstrip('\n').split('\n')[0]
+            prediction = prediction.lstrip("\n").split("\n")[0]
         for ground_truth in ground_truths:
             score = max(score, dataset2metric[dataset](prediction, ground_truth, all_classes=all_classes))
         if length < 4000:
@@ -63,18 +65,20 @@ def scorer_e(dataset, predictions, answers, lengths, all_classes):
         scores[key] = round(100 * np.mean(scores[key]), 2)
     return scores
 
+
 def scorer(dataset, predictions, answers, all_classes):
-    total_score = 0.
-    for (prediction, ground_truths) in zip(predictions, answers):
-        score = 0.
+    total_score = 0.0
+    for prediction, ground_truths in zip(predictions, answers):
+        score = 0.0
         if dataset in ["trec", "triviaqa", "samsum", "lsht"]:
-            prediction = prediction.lstrip('\n').split('\n')[0]
+            prediction = prediction.lstrip("\n").split("\n")[0]
         for ground_truth in ground_truths:
             score = max(score, dataset2metric[dataset](prediction, ground_truth, all_classes=all_classes))
         total_score += score
     return round(100 * total_score / len(predictions), 2)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     args = parse_args()
     scores = dict()
     if args.e:
@@ -87,7 +91,7 @@ if __name__ == '__main__':
         if not filename.endswith("jsonl"):
             continue
         predictions, answers, lengths = [], [], []
-        dataset = filename.split('.')[0]
+        dataset = filename.split(".")[0]
         with open(f"{path}/{filename}", "r", encoding="utf-8") as f:
             for line in f:
                 data = json.loads(line)
@@ -107,3 +111,4 @@ if __name__ == '__main__':
         out_path = f"pred/{args.model}/result.json"
     with open(out_path, "w") as f:
         json.dump(scores, f, ensure_ascii=False, indent=4)
+
