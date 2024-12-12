@@ -64,6 +64,8 @@ def kv_hash_forward(
     logging.debug(f"Shape: query: {query_states.shape}, key: {key_states.shape}, value: {value_states.shape}, cos: {cos.shape}, sin: {sin.shape}")
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
+    # NOTE: PCA on Query
+
     if self.config.enable_kvhash and past_key_value is not None:
         past_key_value.update_hash_values(self.layer_idx, key_states)
 
@@ -124,4 +126,3 @@ def convert_llama_with_kv_hash(model):
             model._modules[name].forward = custom_forward
 
     return model
-

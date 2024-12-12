@@ -5,3 +5,4 @@ model/
 pred/
 *.txt
 config/tokens.py
+longbench.log
