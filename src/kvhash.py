@@ -7,7 +7,16 @@ from transformers.models.llama.modeling_llama import repeat_kv
 
 
 class KVHashCache(Cache):
-    def __init__(self, config, cache_budget, sink_protect_tokens, recent_protect_budget, device: str | None, num_planes: int = 4) -> None:
+    def __init__(
+        self,
+        config,
+        cache_budget,
+        sink_protect_tokens,
+        recent_protect_budget,
+        device: str | None,
+        top_k: int = 8,
+        num_planes: int = 4,
+    ) -> None:
         super().__init__()
         self.config = config
         self.cache_budget = cache_budget
@@ -28,6 +37,8 @@ class KVHashCache(Cache):
             self.device = device
         else:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        self.top_k = top_k
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -54,50 +65,15 @@ class KVHashCache(Cache):
         """
         return len(self.key_cache)
 
-    # def update_attn_sum(self, layer_idx, attn_scores):  # Shape: (b, num_head, q_len, k_len)
-    #     summation = torch.sum(attn_scores, dim=2)  # Shape: (b, num_head, k_len)
-    #     # GQA
-    #     # if layer_idx == 0:
-    #     #     print(f'==== attn score shape {attn_scores.shape}')
-    #     #     print(f'==== attn score {attn_scores[:,0:4,:,:]}')
-    #     n_per_group = self.config.num_attention_heads // self.config.num_key_value_heads
-    #     # if layer_idx == 0:
-    #     #     print(f'======== summation {summation.shape} ')
-    #     #     print(f'======== summation {summation[:,0:4,:]}')
-    #     #     print(f'========n_per_group {n_per_group}')
-    #     if n_per_group > 1:
-    #         temp = summation.view(summation.shape[0], self.config.num_key_value_heads, n_per_group, -1)
-    #         summation = temp.sum(dim=2)
-    #     # if layer_idx == 0:
-    #     #     print(f"===== summation.shape = {summation.shape}")
-    #     #     print(f'===== summation after {summation[:,0,:]}')
-
-    #     if self.attn_sum[layer_idx] is None:
-    #         self.attn_sum[layer_idx] = summation
-    #     else:
-    #         self.attn_sum[layer_idx] += summation[:, :, :self.attn_sum[layer_idx].shape[-1]]
-    #         q_len = summation.shape[-1] - self.attn_sum[layer_idx].shape[-1]
-    #         new_in = summation[:, :, -q_len:]
-    #         self.attn_sum[layer_idx] = torch.cat([self.attn_sum[layer_idx], new_in], dim=2)
-    #     # if layer_idx == 0 and self.attn_sum[layer_idx] is not None:
-    #     #     print(f"attn_sum shape: {self.attn_sum[layer_idx].shape}")
-
     def update_hash_values(self, layer_idx, key_states, q_len):  # Shape: (b, num_head, q_len, k_len)
         hash_bits = torch.matmul(key_states[:, :, -q_len:, :], self.div_planes.transpose(-1, -2))
         hash_bits = (hash_bits >= 0).to(torch.float32)
         hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, num_head, s_len)
-        # if layer_idx == 0:
-        #     print(f"======= hash_bits shape {hash_bits.shape} === {hash_bits[:,0,:,:]}")
-        #     print(f"======= hash_vals shape {hash_vals.shape} === {hash_vals[:,0,:]}")
 
         if self.hash_values[layer_idx] is None:
-            # Initialize hash_values if it is None
             self.hash_values[layer_idx] = hash_vals
         else:
-            # q_len = key_states.shape[2]
             self.hash_values[layer_idx] = torch.cat([self.hash_values[layer_idx], hash_vals[:, :, -q_len:]], dim=2)
-            # if layer_idx == 0:
-            #     print(f'====== self.hash_values shape {self.hash_values[layer_idx].shape} === {self.hash_values[layer_idx]}')
 
     def proxy_token_selection(self, query_states, k=128, tail=128):
         hash_bits = torch.matmul(query_states, self.div_planes.transpose(-1, -2))
@@ -122,6 +98,137 @@ class KVHashCache(Cache):
         tail_indices = torch.arange(range_limit, qlen).expand(b, num_head, tail).to(self.device)  # (b, num_head, tail)
         proxy_indices = torch.cat([sampled_indices, tail_indices], dim=-1).unsqueeze(-1).expand(-1, -1, -1, hidden_d)  # (b, num_head, tail+k, hidden_d)
         return proxy_indices
+
+    def pca_select(self, data: torch.Tensor, k: int):
+        """pca_select: select seq_len from (seq_len, hidden) data using PCA.
+
+        Args:
+            data: torch.Tensor: (seq_len, hidden)
+            k: number of top PCs to select
+
+        Returns:
+            indices: torch.Tensor: (k,)
+        """
+        assert data.dim() == 2, "Input tensor must have 2 dimensions (seqlen, hidden)."
+        s, h = data.shape
+        data_center = data - data.mean(dim=0)
+        if data_center.dtype != torch.float32:
+            data_center = data_center.to(torch.float32)
+        U, S, Vh = torch.linalg.svd(data_center, full_matrices=False)
+        top_PCs = Vh[:k, :]  # Shape: (k, h)
+        # Projection: (s, k)
+        projection = torch.matmul(data_center, top_PCs.T)
+        importance_scores = projection.pow(2).sum(dim=1)
+        _, top_k_indices = torch.topk(importance_scores, k=k, largest=True, sorted=True)  # Shape: (k,)
+        return top_k_indices
+
+    def select_q_pca_svd(self, data: torch.Tensor, k: int) -> torch.Tensor:
+        """
+        Select top k sequence indices based on their contribution to the variance using PCA via SVD.
+        (For every b, n, select top k indices from seqlen)
+
+        Args:
+            data (torch.Tensor): Input tensor of shape (batch, num_head, seqlen, hidden).
+            k (int): Number of sequence indices to select.
+
+        Returns:
+            torch.Tensor: Indices of shape (batch, num_head, k) representing the selected sequence positions.
+        """
+        b, n, s, h = data.shape
+
+        data_centered = data - data.mean(dim=2, keepdim=True)  # Shape: (b, n, s, h)
+
+        data_reshaped = data_centered.view(b * n, s, h)  # Shape: (b*n, s, h)
+
+        # U: (b*n, s, s), S: (b*n, min(s, h)), Vh: (b*n, h, h)
+        U, S, Vh = torch.linalg.svd(data_reshaped, full_matrices=False)  # SVD is batched
+
+        top_PCs = Vh[:, :k, :]  # Shape: (b*n, k, h)
+
+        # Projection: (b*n, s, k)
+        projection = torch.matmul(data_reshaped, top_PCs.transpose(-2, -1))  # (b*n, s, k)
+
+        # Shape: (b*n, s)
+        importance_scores = projection.pow(2).sum(dim=2)  # Sum over the k principal components
+
+        # Indices with the highest scores are most important
+        _, top_k_indices = torch.topk(importance_scores, k=k, dim=1, largest=True, sorted=True)  # Shape: (b*n, k)
+
+        selected_indices = top_k_indices.view(b, n, k)  # Shape: (b, n, k)
+
+        return selected_indices
+
+    def select_q_pca2(self, data: torch.Tensor, k: int):
+        b, n, s, h = data.shape
+        # Every b, n would choose a different set of indices tokens
+        indices = torch.zeros((b, n, k), device=data.device, dtype=torch.long)
+        for i in range(b):
+            for j in range(n):
+                indices[i, j] = self.pca_select(data[i, j], k)
+        return indices
+
+    def select_q_pca(self, x: torch.Tensor, k: int):
+        """
+        Select top k sequence indices based on their contribution to the variance using PCA.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch, num_head, seqlen, hidden).
+            k (int): Number of sequence indices to select.
+
+        Returns:
+            torch.Tensor: Indices of shape (k,) representing the selected sequence positions.
+                --> no matter of the "batch" or "num_head" or "hidden" dimensions
+        """
+        # Step 1: Get the dimensions
+        batch, num_head, seqlen, hidden = x.shape
+        # print(f"Input shape: {x.shape}")
+
+        # New shape: (batch, num_head, hidden, seqlen)
+        x_permuted = x.permute(0, 1, 3, 2)
+        # print(f"Permuted shape: {x_permuted.shape}")
+
+        # New shape: (batch * num_head * hidden, seqlen)
+        x_reshaped = x_permuted.contiguous().view(-1, seqlen)
+        # print(f"Reshaped shape for PCA: {x_reshaped.shape}")
+
+        # Shape: (batch*num_head*hidden, 1)
+        mean = torch.mean(x_reshaped, dim=1, keepdim=True)
+        x_centered = x_reshaped - mean
+        # print(f"Data centered. Mean shape: {mean.shape}")
+
+        if x_centered.dtype != torch.float32:
+            x_centered = x_centered.to(torch.float32)
+            # print("Data cast to float32 for covariance computation.")
+
+        # Compute covariance matrix: (seqlen, seqlen)
+        covariance = torch.matmul(x_centered.T, x_centered) / (x_centered.size(0) - 1)
+        # print(f"Covariance matrix shape: {covariance.shape}")
+
+        try:
+            eigenvalues, eigenvectors = torch.linalg.eigh(covariance)
+        except RuntimeError as e:
+            # print(f"Eigen decomposition failed: {e}")
+            # As a fallback, move data to CPU and perform eigen decomposition
+            covariance_cpu = covariance.cpu()
+            eigenvalues_cpu, eigenvectors_cpu = torch.linalg.eigh(covariance_cpu)
+            eigenvalues = eigenvalues_cpu.to(covariance.device)
+            eigenvectors = eigenvectors_cpu.to(covariance.device)
+            # print("Eigen decomposition performed on CPU and moved back to original device.")
+
+        sorted_indices = torch.argsort(eigenvalues, descending=True)
+        top_eigenvectors = eigenvectors[:, sorted_indices[:k]]  # Shape: (seqlen, k)
+
+        importance_scores = torch.sum(top_eigenvectors**2, dim=1)  # Shape: (seqlen,)
+        # print(f"Importance scores shape: {importance_scores.shape}")
+
+        # Higher scores indicate higher contribution to variance
+        _, top_k_indices = torch.topk(importance_scores, k=k, largest=True, sorted=True)
+        # print(f"Top {k} indices: {top_k_indices}")
+
+        # Optionally, cast indices to long type if not already
+        top_k_indices = top_k_indices.long()
+
+        return top_k_indices
 
     def update(
         self,
@@ -166,16 +273,24 @@ class KVHashCache(Cache):
         if layer_idx == 0:
             print(f"q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}")
 
-        print(f"self.device: {self.device}")
-        print(f"query_states shape: {query_states.shape}, on {query_states.device}")
+        # print(f"self.device: {self.device}")
+        # print(f"query_states shape: {query_states.shape}, on {query_states.device}")
 
         # proxy token selection
-        # TODO PCA implementation
-        proxy_indices = self.proxy_token_selection(query_states)  # (b, num_head, tail+k, hidden_d)
+        # proxy_indices = self.proxy_token_selection(query_states)  # (b, num_head, tail+k, hidden_d)
+        # print(f"DEBUG: PXY: {proxy_indices.shape}")
+        # proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)  # (b, num_head, tail+k, hidden_d)
+
+        # NOTE: PCA implementation
+        proxy_indices = self.select_q_pca2(query_states, self.top_k)  # (b, num_head, k)
+        # print(f"DEBUG: PCA: {proxy_indices.shape}")
+        # proxy_indices = proxy_indices.unsqueeze(-1).repeat(1, 1, 1, query_states.shape[-1])# (b, num_head, k, hidden_d)
+        proxy_indices = proxy_indices.unsqueeze(-1).expand(-1, -1, -1, query_states.shape[-1])  # (b, num_head, k, hidden_d)
+        proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)  # (b, num_head, tail+k, hidden_d)
+        # proxy_query_states = query_states[:, :, proxy_indices, :]
 
         # calculate proxy attention scores
         key_to_mul = repeat_kv(self.key_cache[layer_idx], self.config.num_attention_heads // self.config.num_key_value_heads)
-        proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)
         attn_weights = torch.matmul(proxy_query_states, key_to_mul.transpose(2, 3)) / math.sqrt(self.config.head_dim)
         summation = torch.sum(attn_weights, dim=2)
         n_per_group = self.config.num_attention_heads // self.config.num_key_value_heads
@@ -279,7 +394,8 @@ class KVHashCache(Cache):
 
     def pca_selection(self, k, head_idx, evict_num):
         # This function serves as a pca-informed indices selection
-        # for Q,K,V matrices like (bsz, num_head, q_len, hidden_d), this function use pca of hidden_d to inform most informative
+        # for Q,K,V matrices like (bsz, num_head, q_len, hidden_d),
+        # this function use pca of hidden_d to inform most informative
         # tokens on dim = -2
         # TODO fix dimemsion
         bsz, num_head, q_len, hidden_d = self.key_cache[head_idx].shape

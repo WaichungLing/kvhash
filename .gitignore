@@ -4,3 +4,4 @@ data/
 model/
 *.txt
 config/tokens.py
+test

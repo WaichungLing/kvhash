@@ -7,4 +7,4 @@
 #SBATCH --mail-user=jinfan@comp.nus.edu.sg
 
 . .venv/bin/activate
-srun python eval_longbench.py
+srun python eval_longbench.py --cache_budget=0.4

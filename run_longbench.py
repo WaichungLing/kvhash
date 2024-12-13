@@ -169,7 +169,13 @@ def main():
     past_key_value = None
     if args.enable_kvhash:
         past_key_value = KVHashCache(
-            config, cache_budget=args.cache_budget, sink_protect_tokens=args.sink_protect_tokens, recent_protect_budget=args.recent_protect_budget, num_planes=args.num_planes, device=args.device
+            config,
+            cache_budget=args.cache_budget,
+            sink_protect_tokens=args.sink_protect_tokens,
+            recent_protect_budget=args.recent_protect_budget,
+            num_planes=args.num_planes,
+            device=args.device,
+            top_k=args.top_k,
         ).to(args.device)
 
     # Prepare dataset
@@ -194,6 +200,8 @@ def main():
         print("Load dataset done")
 
         get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, args.device, args.model_name, out_path)
+
+        print(f"out_path: {out_path}")
 
 
 if __name__ == "__main__":
