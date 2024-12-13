@@ -169,7 +169,7 @@ def main():
     past_key_value = None
     if args.enable_kvhash:
         past_key_value = KVHashCache(
-            config, cache_budget=args.cache_budget, sink_protect_tokens=args.sink_protect_tokens, recent_protect_budget=args.recent_protect_budget, num_planes=args.num_planes
+            config, cache_budget=args.cache_budget, sink_protect_tokens=args.sink_protect_tokens, recent_protect_budget=args.recent_protect_budget, num_planes=args.num_planes, device=args.device
         ).to(args.device)
 
     # Prepare dataset

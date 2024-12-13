@@ -1,12 +1,8 @@
-import math
 import torch
-import torch.nn.functional as F
 
 from typing import Optional, Tuple
-from torch import nn
 from transformers.modeling_flash_attention_utils import _flash_attention_forward
 from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
     LlamaFlashAttention2,
     apply_rotary_pos_emb,
 )
@@ -14,7 +10,6 @@ from transformers.cache_utils import (
     Cache,
     StaticCache,
 )
-from src.kvhash import KVHashCache
 
 
 def my_forward(
@@ -64,9 +59,11 @@ def my_forward(
     if past_key_value is not None:
         # sin and cos are specific to RoPE models; cache_position needed for the static cache
         cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-        key_states, value_states = past_key_value.update(key_states, value_states, query_states, self.layer_idx, cache_kwargs)
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-    # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache
+    # TODO: These transpose are quite inefficient but Flash Attention requires the layout
+    # [batch_size, sequence_length, num_heads, head_dim].
+    # We would need to refactor the KV cache
     # to be able to avoid many of these transpose/reshape/view.
     query_states = query_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
@@ -122,7 +119,6 @@ def my_forward(
             past_key_value.evict(self.layer_idx, query_states)
 
     if not output_attentions:
-        # NOTE: Perform PCA on Query to recompute attn_weights
         attn_weights = None
 
     return attn_output, attn_weights, past_key_value

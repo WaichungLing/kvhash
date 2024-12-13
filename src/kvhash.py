@@ -7,7 +7,7 @@ from transformers.models.llama.modeling_llama import repeat_kv
 
 
 class KVHashCache(Cache):
-    def __init__(self, config, cache_budget, sink_protect_tokens, recent_protect_budget, num_planes: int = 4) -> None:
+    def __init__(self, config, cache_budget, sink_protect_tokens, recent_protect_budget, device: str | None, num_planes: int = 4) -> None:
         super().__init__()
         self.config = config
         self.cache_budget = cache_budget
@@ -23,6 +23,11 @@ class KVHashCache(Cache):
         # self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.register_buffer("div_planes", torch.randn((self.num_planes, self.config.head_dim), dtype=torch.bfloat16))
         self.register_buffer("powers_of_two", 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.float32))
+
+        if device is not None:
+            self.device = device
+        else:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -104,7 +109,7 @@ class KVHashCache(Cache):
         reshaped_hash_vals = hash_vals.view(-1, hash_vals.shape[-1])  # Shape: (b * num_head, qlen)
         range_limit = qlen - tail
         reshaped_hash_vals = hash_vals[:, :, :range_limit].reshape(-1, range_limit)
-        sampled_indices = torch.empty((reshaped_hash_vals.shape[0], k), dtype=torch.long)
+        sampled_indices = torch.empty((reshaped_hash_vals.shape[0], k), dtype=torch.long, device=self.device)
         for row_idx, row in enumerate(reshaped_hash_vals):
             unique_vals, counts = torch.unique(row, return_counts=True)
             probabilities = counts.float() / counts.sum()
@@ -114,7 +119,7 @@ class KVHashCache(Cache):
             shuffled_indices = all_indices[torch.randperm(all_indices.size(0))]
             sampled_indices[row_idx, :] = shuffled_indices[:k]
         sampled_indices = sampled_indices.view(b, num_head, k)  # (b, num_head, k)
-        tail_indices = torch.arange(range_limit, qlen).expand(b, num_head, tail)  # (b, num_head, tail)
+        tail_indices = torch.arange(range_limit, qlen).expand(b, num_head, tail).to(self.device)  # (b, num_head, tail)
         proxy_indices = torch.cat([sampled_indices, tail_indices], dim=-1).unsqueeze(-1).expand(-1, -1, -1, hidden_d)  # (b, num_head, tail+k, hidden_d)
         return proxy_indices
 
@@ -125,6 +130,7 @@ class KVHashCache(Cache):
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        assert cache_kwargs is not None, "cache_kwargs must be provided for KVHashCache"
         if layer_idx == 0:
             self._seen_tokens += key_states.shape[-2]
 
@@ -135,7 +141,7 @@ class KVHashCache(Cache):
             self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
 
-        assert self.key_cache[layer_idx].shape[2] == self.value_cache[layer_idx].shape[2], f"Mismatch in the sequence length of K and V Cache"
+        assert self.key_cache[layer_idx].shape[2] == self.value_cache[layer_idx].shape[2], "Mismatch in the sequence length of K and V Cache"
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
     def evict(self, layer_idx: int, query_states: torch.Tensor):
@@ -155,10 +161,13 @@ class KVHashCache(Cache):
             return
         if evict_tokens == 0:
             return
-        assert evict_tokens > 0, f"the number of tokens need to be evicted should be larger than 0"
+        assert evict_tokens > 0, "the number of tokens need to be evicted should be larger than 0"
 
         if layer_idx == 0:
             print(f"q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}")
+
+        print(f"self.device: {self.device}")
+        print(f"query_states shape: {query_states.shape}, on {query_states.device}")
 
         # proxy token selection
         # TODO PCA implementation
@@ -282,4 +291,3 @@ class KVHashCache(Cache):
         column_sum = torch.sum(projected_k_cache, dim=2)  # (bsz, num_head, q_len)
         _, indicees = torch.topk(column_sum, evict_num)
         return indicees
-
