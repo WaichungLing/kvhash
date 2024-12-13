@@ -173,49 +173,27 @@ def main():
         ).to(args.device)
 
     # Prepare dataset
-    if args.task == "all":
-        datasets = LONGBENCH_TASKS
-    else:
+    datasets = LONGBENCH_TASKS
+    if args.task != "all":
         if args.task in LONGBENCH_TASKS:
             datasets = [args.task]
 
     dataset2prompt = json.load(open("longbench/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("longbench/dataset2maxlen.json", "r"))
 
+    base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}"
     for dataset in datasets:
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
-        if not os.path.exists(f"{args.pred_dir}/{args.model_name}"):
-            os.makedirs(f"{args.pred_dir}/{args.model_name}")
-        out_path = f"{args.pred_dir}/{args.model_name}/{dataset}.jsonl"
+        if not os.path.exists(base_dir):
+            os.makedirs(base_dir)
+        out_path = f"{base_dir}/{dataset}.jsonl"
 
         print(f"Prepareing dataset {dataset}, max_gen = {max_gen}, out_path = {out_path}")
         data = load_dataset("THUDM/LongBench", dataset, split="test", cache_dir=args.data_dir)
         print("Load dataset done")
 
         get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, args.device, args.model_name, out_path)
-
-    # input_text = "Compare the Llama model and GPT model"
-    # max_length = 50
-    # inputs = tokenizer(
-    #     input_text,
-    #     return_tensors="pt",
-    # ).to(args.device)
-
-    # # print(f"\nInput Text: {input_text} -- token: {inputs.input_ids.shape[1]}")
-
-    # outputs = model.generate(
-    #     inputs.input_ids,
-    #     max_new_tokens=max_length,
-    #     attention_mask=inputs.attention_mask,
-    #     use_cache=True,
-    #     past_key_values = past_key_value
-    # )
-    # generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    # # Print the result
-    # print(f"\nInput Text: {input_text} -- token: {inputs.input_ids.shape[1]}")
-    # print("Generated Text:", generated_text)
 
 
 if __name__ == "__main__":

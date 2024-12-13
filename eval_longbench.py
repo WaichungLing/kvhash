@@ -44,6 +44,7 @@ def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="meta-llama/Llama-3.2-1B-Instruct")
     parser.add_argument("--e", action="store_true", help="Evaluate on LongBench-E")
+    parser.add_argument("--cache_budget", type=float, default=0.6, help="kv cache budget")
     return parser.parse_args(args)
 
 
@@ -81,10 +82,10 @@ def scorer(dataset, predictions, answers, all_classes):
 if __name__ == "__main__":
     args = parse_args()
     scores = dict()
+    sub_dir = f"{args.model}-{args.cache_budget}"
+    path = f"pred/{sub_dir}/"
     if args.e:
-        path = f"pred_e/{args.model}/"
-    else:
-        path = f"pred/{args.model}/"
+        path = f"pred_e/{sub_dir}/"
     all_files = os.listdir(path)
     print("Evaluating on:", all_files)
     for filename in all_files:
@@ -92,6 +93,7 @@ if __name__ == "__main__":
             continue
         predictions, answers, lengths = [], [], []
         dataset = filename.split(".")[0]
+        all_classes = None
         with open(f"{path}/{filename}", "r", encoding="utf-8") as f:
             for line in f:
                 data = json.loads(line)
@@ -105,10 +107,6 @@ if __name__ == "__main__":
         else:
             score = scorer(dataset, predictions, answers, all_classes)
         scores[dataset] = score
-    if args.e:
-        out_path = f"pred_e/{args.model}/result.json"
-    else:
-        out_path = f"pred/{args.model}/result.json"
+    out_path = f"{path}/result.json"
     with open(out_path, "w") as f:
         json.dump(scores, f, ensure_ascii=False, indent=4)
-
