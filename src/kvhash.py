@@ -14,7 +14,7 @@ class KVHashCache(Cache):
         sink_protect_tokens,
         recent_protect_budget,
         device: str | None,
-        top_k: int = 8,
+        top_k: float = 0.01,
         num_planes: int = 4,
     ) -> None:
         super().__init__()
@@ -270,9 +270,6 @@ class KVHashCache(Cache):
             return
         assert evict_tokens > 0, "the number of tokens need to be evicted should be larger than 0"
 
-        if layer_idx == 0:
-            print(f"q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}")
-
         # print(f"self.device: {self.device}")
         # print(f"query_states shape: {query_states.shape}, on {query_states.device}")
 
@@ -282,12 +279,19 @@ class KVHashCache(Cache):
         # proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)  # (b, num_head, tail+k, hidden_d)
 
         # NOTE: PCA implementation
-        proxy_indices = self.select_q_pca2(query_states, self.top_k)  # (b, num_head, k)
+        top_k = int(self.top_k * q_len)  # Choose topk = ratio * q_len
+        top_k = max(top_k, min(q_len, 10))
+        proxy_indices = self.select_q_pca2(query_states, top_k)  # (b, num_head, k)
         # print(f"DEBUG: PCA: {proxy_indices.shape}")
         # proxy_indices = proxy_indices.unsqueeze(-1).repeat(1, 1, 1, query_states.shape[-1])# (b, num_head, k, hidden_d)
         proxy_indices = proxy_indices.unsqueeze(-1).expand(-1, -1, -1, query_states.shape[-1])  # (b, num_head, k, hidden_d)
         proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)  # (b, num_head, tail+k, hidden_d)
         # proxy_query_states = query_states[:, :, proxy_indices, :]
+
+        if layer_idx == 0:
+            print(
+                f"q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}, q.shape={query_states.shape} -> {proxy_query_states.shape}"
+            )
 
         # calculate proxy attention scores
         key_to_mul = repeat_kv(self.key_cache[layer_idx], self.config.num_attention_heads // self.config.num_key_value_heads)
