@@ -5,3 +5,4 @@ model/
 *.txt
 config/tokens.py
 test
+result
