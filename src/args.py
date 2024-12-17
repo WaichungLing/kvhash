@@ -18,5 +18,6 @@ def parse_args():
     parser.add_argument("--num_planes", type=int, default=4, help="number of division plane")
     parser.add_argument("--top_k", type=float, default=0.01, help="top k (percent) for Q PCA (seq_len) eviction")
     # tasks:
-    parser.add_argument("--task", type=str, default="multi_news", help="evaluation task")
+    # parser.add_argument("--task", type=str, default="multi_news", help="evaluation task")
+    parser.add_argument("--task", type=str, default="narrativeqa", help="evaluation task")
     return parser.parse_args()
