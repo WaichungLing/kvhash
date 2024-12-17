@@ -115,7 +115,7 @@ class KVHashCache(Cache):
         if data_center.dtype != torch.float32:
             data_center = data_center.to(torch.float32)
         U, S, Vh = torch.linalg.svd(data_center, full_matrices=False)
-        top_PCs = Vh[:k, :]  # Shape: (k, h)
+        top_PCs = Vh  # Shape: (h, h)
         # Projection: (s, k)
         projection = torch.matmul(data_center, top_PCs.T)
         importance_scores = projection.pow(2).sum(dim=1)
