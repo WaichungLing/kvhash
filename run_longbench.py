@@ -2,6 +2,8 @@ import torch
 import os
 import json
 import warnings
+import random
+import numpy as np
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, DynamicCache
 
@@ -41,8 +43,8 @@ MAX_CONTEXT = 127 * 1024
 def seed_everything(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    # np.random.seed(seed)
-    # random.seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.cuda.manual_seed_all(seed)
@@ -78,6 +80,7 @@ def post_process(response, model_name):
 
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
+    idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
@@ -103,6 +106,7 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                 **input,
                 max_new_tokens=max_gen,
                 min_length=context_length + 1,
+                do_sample=False,
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
             )[0]
         else:
@@ -111,6 +115,7 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                     **input,
                     max_new_tokens=max_gen,
                     use_cache=True,
+                    do_sample=False,
                 )[0]
             else:
                 output = model.generate(**input, max_new_tokens=max_gen, use_cache=True, past_key_values=past_key_value)[0]
@@ -122,6 +127,9 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
             f.write("\n")
+        if idx == 100:
+            break
+        idx += 1
     # dist.destroy_process_group()
 
 

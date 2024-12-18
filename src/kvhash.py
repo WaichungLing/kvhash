@@ -77,31 +77,7 @@ class KVHashCache(Cache):
         else:
             self.hash_values[layer_idx] = torch.cat([self.hash_values[layer_idx], hash_vals[:, :, -q_len:]], dim=2)
 
-    def proxy_token_selection(self, query_states, k=128, tail=128):
-        hash_bits = torch.matmul(query_states, self.div_planes.transpose(-1, -2))
-        hash_bits = (hash_bits >= 0).to(torch.float32)
-        hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # shape (b, num_head, qlen)
-
-        b, num_head, qlen, hidden_d = query_states.shape
-
-        reshaped_hash_vals = hash_vals.view(-1, hash_vals.shape[-1])  # Shape: (b * num_head, qlen)
-        range_limit = qlen - tail
-        reshaped_hash_vals = hash_vals[:, :, :range_limit].reshape(-1, range_limit)
-        sampled_indices = torch.empty((reshaped_hash_vals.shape[0], k), dtype=torch.long, device=self.device)
-        for row_idx, row in enumerate(reshaped_hash_vals):
-            unique_vals, counts = torch.unique(row, return_counts=True)
-            probabilities = counts.float() / counts.sum()
-
-            sampled_vals = torch.multinomial(probabilities, k, replacement=True)
-            all_indices = torch.nonzero(row.unsqueeze(0) == unique_vals[sampled_vals].unsqueeze(1), as_tuple=False)[:, 1]
-            shuffled_indices = all_indices[torch.randperm(all_indices.size(0))]
-            sampled_indices[row_idx, :] = shuffled_indices[:k]
-        sampled_indices = sampled_indices.view(b, num_head, k)  # (b, num_head, k)
-        tail_indices = torch.arange(range_limit, qlen).expand(b, num_head, tail).to(self.device)  # (b, num_head, tail)
-        proxy_indices = torch.cat([sampled_indices, tail_indices], dim=-1).unsqueeze(-1).expand(-1, -1, -1, hidden_d)  # (b, num_head, tail+k, hidden_d)
-        return proxy_indices
-
-    def pca_select(self, data: torch.Tensor, r:int,  k: int):
+    def pca_select(self, data: torch.Tensor, r:int,  k: int, write: bool):
         """pca_select: select seq_len from (seq_len, hidden) data using PCA.
 
         Args:
@@ -118,6 +94,22 @@ class KVHashCache(Cache):
         if data_center.dtype != torch.float32:
             data_center = data_center.to(torch.float32)
         U, S, Vh = torch.linalg.svd(data_center, full_matrices=False)  # Vh: (h, h)
+
+        # =========== observation =============== #
+        if write:
+            n_samples = data_center.shape[0]  # Number of rows in the data
+            eigenvalues = (S ** 2) / (n_samples - 1)
+            total_variance = torch.sum(eigenvalues)
+            explained_variance_ratio = eigenvalues / total_variance
+
+            output_file = "key_pca.txt"
+
+            # Open the file in append mode and write the data
+            with open(output_file, "a") as f:
+                ratios_str = " ".join([f"{ratio.item()}" for ratio in explained_variance_ratio])
+                f.write(ratios_str + "\n") 
+        # ======================================= #
+
         w = min(r, h)
         top_PCs = Vh[:w, :]  # Shape: (w, h)
         # Projection: (s, k)
@@ -162,13 +154,13 @@ class KVHashCache(Cache):
 
         return selected_indices
 
-    def select_q_pca2(self, data: torch.Tensor, r: int, k: int):
+    def select_q_pca2(self, data: torch.Tensor, r: int, k: int, write: bool):
         b, n, s, h = data.shape
         # Every b, n would choose a different set of indices tokens
         indices = torch.zeros((b, n, k), device=data.device, dtype=torch.long)
         for i in range(b):
             for j in range(n):
-                indices[i, j] = self.pca_select(data[i, j], r, k)
+                indices[i, j] = self.pca_select(data[i, j], r, k, write)
         return indices
 
     def select_q_pca(self, x: torch.Tensor, k: int):
@@ -285,7 +277,12 @@ class KVHashCache(Cache):
         # NOTE: PCA implementation
         top_k = int(self.top_k * q_len)  # Choose topk = ratio * q_len
         top_k = max(top_k, min(q_len, 10))
-        proxy_indices = self.select_q_pca2(query_states, self.top_rank, top_k)  # (b, num_head, k)
+        proxy_indices = self.select_q_pca2(query_states, self.top_rank, top_k, False)  # (b, num_head, k)
+
+        # ============= Observation ================ #
+        _ = self.select_q_pca2(self.key_cache[layer_idx], self.top_rank, top_k, True)
+
+        # ============= Observation =============== #
         # print(f"DEBUG: PCA: {proxy_indices.shape}")
         # proxy_indices = proxy_indices.unsqueeze(-1).repeat(1, 1, 1, query_states.shape[-1])# (b, num_head, k, hidden_d)
         proxy_indices = proxy_indices.unsqueeze(-1).expand(-1, -1, -1, query_states.shape[-1])  # (b, num_head, k, hidden_d)
