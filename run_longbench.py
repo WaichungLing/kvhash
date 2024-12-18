@@ -135,6 +135,8 @@ def main():
     seed_everything(42)
 
     args = parse_args()
+    if args.cache_budget == 1.0:
+        args.enable_kvhash = False
 
     if not os.path.exists(args.pred_dir):
         os.makedirs(args.pred_dir)
@@ -176,6 +178,7 @@ def main():
             num_planes=args.num_planes,
             device=args.device,
             top_k=args.top_k,
+            top_rank=args.top_rank
         ).to(args.device)
 
     # Prepare dataset
