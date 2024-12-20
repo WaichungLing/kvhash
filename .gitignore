@@ -6,3 +6,4 @@ model/
 config/tokens.py
 test
 result
+notebooks/.idea/
