@@ -80,7 +80,6 @@ def post_process(response, model_name):
 
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
-    idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
@@ -127,9 +126,6 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
             f.write("\n")
-        if idx == 100:
-            break
-        idx += 1
     # dist.destroy_process_group()
 
 

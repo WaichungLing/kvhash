@@ -95,20 +95,20 @@ class KVHashCache(Cache):
             data_center = data_center.to(torch.float32)
         U, S, Vh = torch.linalg.svd(data_center, full_matrices=False)  # Vh: (h, h)
 
-        # =========== observation =============== #
-        if write:
-            n_samples = data_center.shape[0]  # Number of rows in the data
-            eigenvalues = (S ** 2) / (n_samples - 1)
-            total_variance = torch.sum(eigenvalues)
-            explained_variance_ratio = eigenvalues / total_variance
+        # # =========== observation =============== #
+        # if write:
+        #     n_samples = data_center.shape[0]  # Number of rows in the data
+        #     eigenvalues = (S ** 2) / (n_samples - 1)
+        #     total_variance = torch.sum(eigenvalues)
+        #     explained_variance_ratio = eigenvalues / total_variance
 
-            output_file = "key_pca.txt"
+        #     output_file = "key_pca.txt"
 
-            # Open the file in append mode and write the data
-            with open(output_file, "a") as f:
-                ratios_str = " ".join([f"{ratio.item()}" for ratio in explained_variance_ratio])
-                f.write(ratios_str + "\n") 
-        # ======================================= #
+        #     # Open the file in append mode and write the data
+        #     with open(output_file, "a") as f:
+        #         ratios_str = " ".join([f"{ratio.item()}" for ratio in explained_variance_ratio])
+        #         f.write(ratios_str + "\n") 
+        # # ======================================= #
 
         w = min(r, h)
         top_PCs = Vh[:w, :]  # Shape: (w, h)
@@ -253,7 +253,7 @@ class KVHashCache(Cache):
 
         self.update_hash_values(layer_idx, self.key_cache[layer_idx], query_states.shape[-2])
 
-        # compute budgets
+        # =============== compute budgets =====================
         q_len = self.key_cache[layer_idx].shape[2]
         recent_protect_tokens = int(self.recent_protect_budget * q_len)
         if recent_protect_tokens == 0:
@@ -265,29 +265,27 @@ class KVHashCache(Cache):
         if evict_tokens == 0:
             return
         assert evict_tokens > 0, "the number of tokens need to be evicted should be larger than 0"
-
+        # =============== compute budgets =====================
+        
+        # =============== select query proxy ==================
+        # 1. PCA guided
+        # 2. Tail
         # print(f"self.device: {self.device}")
         # print(f"query_states shape: {query_states.shape}, on {query_states.device}")
 
-        # proxy token selection
-        # proxy_indices = self.proxy_token_selection(query_states)  # (b, num_head, tail+k, hidden_d)
-        # print(f"DEBUG: PXY: {proxy_indices.shape}")
+        # NOTE: PCA implementation
+        # (below 5) work version
+        # top_k = int(self.top_k * q_len)  # Choose topk = ratio * q_len
+        # top_k = max(top_k, min(q_len, 10))
+        # proxy_indices = self.select_q_pca2(query_states, self.top_rank, top_k, False)  # (b, num_head, k)
+        # proxy_indices = proxy_indices.unsqueeze(-1).expand(-1, -1, -1, query_states.shape[-1])  # (b, num_head, k, hidden_d)
         # proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)  # (b, num_head, tail+k, hidden_d)
 
-        # NOTE: PCA implementation
-        top_k = int(self.top_k * q_len)  # Choose topk = ratio * q_len
-        top_k = max(top_k, min(q_len, 10))
-        proxy_indices = self.select_q_pca2(query_states, self.top_rank, top_k, False)  # (b, num_head, k)
+        # record key pca
+        # _ = self.select_q_pca2(self.key_cache[layer_idx], self.top_rank, top_k, True)
 
-        # ============= Observation ================ #
-        _ = self.select_q_pca2(self.key_cache[layer_idx], self.top_rank, top_k, True)
-
-        # ============= Observation =============== #
-        # print(f"DEBUG: PCA: {proxy_indices.shape}")
-        # proxy_indices = proxy_indices.unsqueeze(-1).repeat(1, 1, 1, query_states.shape[-1])# (b, num_head, k, hidden_d)
-        proxy_indices = proxy_indices.unsqueeze(-1).expand(-1, -1, -1, query_states.shape[-1])  # (b, num_head, k, hidden_d)
-        proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)  # (b, num_head, tail+k, hidden_d)
-        # proxy_query_states = query_states[:, :, proxy_indices, :]
+        proxy_query_states = query_states[:,:,-256:,:]
+        #================ select query proxy ==================
 
         if layer_idx == 0:
             print(
@@ -307,10 +305,11 @@ class KVHashCache(Cache):
         evict_attn = summation[:, :, self.sink_protect_tokens : -recent_protect_tokens]  # Shape (b, num_heads, qlen)
         evict_ids = []  # Pure two d array, [[head1], [head2], ...]
         for i in range(self.config.num_key_value_heads):
+            # NOTE: ranking methods
             # head_eviction: random plane
             # head_eviction_topk: flat score
             
-            #evict_id_per_head = self.head_eviction(evict_hash, evict_attn, i, evict_tokens)
+            # evict_id_per_head = self.head_eviction(evict_hash, evict_attn, i, evict_tokens)
             evict_id_per_head = self.head_eviction_topk(evict_attn, i, evict_tokens)[0]
             evict_id_per_head += self.sink_protect_tokens  # evict_hash and evict_attn trimmed by sink_protect_tokens
             evict_ids.append(evict_id_per_head)
