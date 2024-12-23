@@ -123,11 +123,20 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         pred = post_process(pred, model_name)
         if past_key_value is not None:
             print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
+
+            # ======== get key.npy =========
+            kkk = past_key_value.key_cache
+            kkk_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in kkk]
+            np.save("key_state.npy", np.array(kkk_cpu, dtype=object))
+            print("successfully saved key states")
+            # ==============================
+
             past_key_value.clear()
+
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
             f.write("\n")
-        if idx == 100:
+        if idx == 0:
             break
         idx += 1
     # dist.destroy_process_group()
