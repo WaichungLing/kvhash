@@ -102,7 +102,7 @@ class KVHashCache(Cache):
             total_variance = torch.sum(eigenvalues)
             explained_variance_ratio = eigenvalues / total_variance
 
-            output_file = "key_pca.txt"
+            output_file = "trec_pca.txt"
 
             # Open the file in append mode and write the data
             with open(output_file, "a") as f:

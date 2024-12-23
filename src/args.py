@@ -14,11 +14,11 @@ def parse_args():
     parser.add_argument("--cache_budget", type=float, default=0.6, help="kv cache budget")
     parser.add_argument("--sink_protect_tokens", type=int, default=128, help="number of tokens to be protect at the head")  # put back 256
     parser.add_argument("--recent_protect_budget", type=int, default=0.05, help="ration of tokens to be protect at the end")  # put back 0.01
-    parser.add_argument("--min_eviction_seqlen", type=int, default=1024, help="sequence length that starts eviction")  # put back 2048
+    parser.add_argument("--min_eviction_seqlen", type=int, default=100, help="sequence length that starts eviction")  # put back 2048
     parser.add_argument("--num_planes", type=int, default=4, help="number of division plane")
     parser.add_argument("--top_k", type=float, default=0.01, help="top k (percent) for Q PCA (seq_len) eviction")
     parser.add_argument("--top_rank", type=int, default=20, help="top rank for PCA reduction")
     # tasks:
-    # parser.add_argument("--task", type=str, default="multi_news", help="evaluation task")
-    parser.add_argument("--task", type=str, default="narrativeqa", help="evaluation task")
+    parser.add_argument("--task", type=str, default="trec", help="evaluation task")
+    # parser.add_argument("--task", type=str, default="narrativeqa", help="evaluation task")
     return parser.parse_args()
