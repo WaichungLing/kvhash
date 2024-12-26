@@ -9,7 +9,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, Dynami
 
 from src.args import parse_args
 from src.replace_llama import convert_llama_with_kv_hash
-from src.kvhash import KVHashCache
+from src.pcquant import PCQuantCache
 from config import tokens
 from datasets import load_dataset
 
@@ -39,6 +39,7 @@ LONGBENCH_TASKS = [
 
 MAX_CONTEXT = 127 * 1024
 
+BITS = [1,2,3,4,8]
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -168,15 +169,14 @@ def main():
 
     past_key_value = None
     if args.enable_kvhash:
-        past_key_value = KVHashCache(
+
+        past_key_value = PCQuantCache(
             config,
             cache_budget=args.cache_budget,
             sink_protect_tokens=args.sink_protect_tokens,
             recent_protect_budget=args.recent_protect_budget,
-            num_planes=args.num_planes,
-            device=args.device,
-            top_k=args.top_k,
-            top_rank=args.top_rank
+            top_rank = args.top_rank,
+            quant_bit = args.quant_bit
         ).to(args.device)
 
     # Prepare dataset
