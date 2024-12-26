@@ -59,7 +59,7 @@ def my_forward(
     if past_key_value is not None:
         # sin and cos are specific to RoPE models; cache_position needed for the static cache
         cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        key_states, value_states = past_key_value.update(key_states, value_states, query_states, self.layer_idx, cache_kwargs)
 
     # TODO: These transpose are quite inefficient but Flash Attention requires the layout
     # [batch_size, sequence_length, num_heads, head_dim].

@@ -28,6 +28,7 @@ class KVHashCache(Cache):
 
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen, hidden)] * layer
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen, hidden)] * layer
+        self.query_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # NOTE: temporary
 
         self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen)] * layer
         # self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
@@ -96,18 +97,18 @@ class KVHashCache(Cache):
         U, S, Vh = torch.linalg.svd(data_center, full_matrices=False)  # Vh: (h, h)
 
         # =========== observation =============== #
-        if write:
-            n_samples = data_center.shape[0]  # Number of rows in the data
-            eigenvalues = (S ** 2) / (n_samples - 1)
-            total_variance = torch.sum(eigenvalues)
-            explained_variance_ratio = eigenvalues / total_variance
+        # if write:
+        #     n_samples = data_center.shape[0]  # Number of rows in the data
+        #     eigenvalues = (S ** 2) / (n_samples - 1)
+        #     total_variance = torch.sum(eigenvalues)
+        #     explained_variance_ratio = eigenvalues / total_variance
 
-            output_file = "trec_pca.txt"
+        #     output_file = "trec_pca.txt"
 
-            # Open the file in append mode and write the data
-            with open(output_file, "a") as f:
-                ratios_str = " ".join([f"{ratio.item()}" for ratio in explained_variance_ratio])
-                f.write(ratios_str + "\n") 
+        #     # Open the file in append mode and write the data
+        #     with open(output_file, "a") as f:
+        #         ratios_str = " ".join([f"{ratio.item()}" for ratio in explained_variance_ratio])
+        #         f.write(ratios_str + "\n") 
         # ======================================= #
 
         w = min(r, h)
@@ -230,6 +231,7 @@ class KVHashCache(Cache):
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
+        query_states: torch.Tensor,
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -240,6 +242,7 @@ class KVHashCache(Cache):
         if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
+            self.query_cache[layer_idx] = query_states
         else:
             self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
@@ -281,8 +284,8 @@ class KVHashCache(Cache):
 
         # ============= Observation ================ #
         _ = self.select_q_pca2(self.key_cache[layer_idx], self.top_rank, top_k, True)
-
         # ============= Observation =============== #
+
         # print(f"DEBUG: PCA: {proxy_indices.shape}")
         # proxy_indices = proxy_indices.unsqueeze(-1).repeat(1, 1, 1, query_states.shape[-1])# (b, num_head, k, hidden_d)
         proxy_indices = proxy_indices.unsqueeze(-1).expand(-1, -1, -1, query_states.shape[-1])  # (b, num_head, k, hidden_d)

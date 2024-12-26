@@ -7,3 +7,4 @@ config/tokens.py
 test
 result
 notebooks/.idea/
+*.npy
