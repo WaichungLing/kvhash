@@ -14,9 +14,7 @@ class KVHashCache(Cache):
         sink_protect_tokens,
         recent_protect_budget,
         device: str | None,
-        top_k: float = 0.01,
         num_planes: int = 4,
-        top_rank: int = 16
     ) -> None:
         super().__init__()
         self.config = config
@@ -29,8 +27,7 @@ class KVHashCache(Cache):
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen, hidden)] * layer
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen, hidden)] * layer
 
-        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen)] * layer
-        # self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.query_hash_vals: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen)] * layer
         self.register_buffer("div_planes", torch.randn((self.num_planes, self.config.head_dim), dtype=torch.bfloat16))
         self.register_buffer("powers_of_two", 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.float32))
 
@@ -38,9 +35,6 @@ class KVHashCache(Cache):
             self.device = device
         else:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        self.top_k = top_k
-        self.top_rank = top_rank
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -67,167 +61,16 @@ class KVHashCache(Cache):
         """
         return len(self.key_cache)
 
-    def update_hash_values(self, layer_idx, key_states, q_len):  # Shape: (b, num_head, q_len, k_len)
-        hash_bits = torch.matmul(key_states[:, :, -q_len:, :], self.div_planes.transpose(-1, -2))
+    def get_hash_values(self, states, q_len):  # Shape: (b, num_head, q_len, k_len)
+        hash_bits = torch.matmul(states[:, :, -q_len:, :], self.div_planes.transpose(-1, -2))
         hash_bits = (hash_bits >= 0).to(torch.float32)
         hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, num_head, s_len)
+        return hash_vals
 
-        if self.hash_values[layer_idx] is None:
-            self.hash_values[layer_idx] = hash_vals
-        else:
-            self.hash_values[layer_idx] = torch.cat([self.hash_values[layer_idx], hash_vals[:, :, -q_len:]], dim=2)
-
-    def pca_select(self, data: torch.Tensor, r:int,  k: int, write: bool):
-        """pca_select: select seq_len from (seq_len, hidden) data using PCA.
-
-        Args:
-            data: torch.Tensor: (seq_len, hidden)
-            r: rank to be kept
-            k: number of top PCs to select
-
-        Returns:
-            indices: torch.Tensor: (k,)
-        """
-        assert data.dim() == 2, "Input tensor must have 2 dimensions (seqlen, hidden)."
-        s, h = data.shape
-        data_center = data - data.mean(dim=0)
-        if data_center.dtype != torch.float32:
-            data_center = data_center.to(torch.float32)
-        U, S, Vh = torch.linalg.svd(data_center, full_matrices=False)  # Vh: (h, h)
-
-        # # =========== observation =============== #
-        # if write:
-        #     n_samples = data_center.shape[0]  # Number of rows in the data
-        #     eigenvalues = (S ** 2) / (n_samples - 1)
-        #     total_variance = torch.sum(eigenvalues)
-        #     explained_variance_ratio = eigenvalues / total_variance
-
-        #     output_file = "key_pca.txt"
-
-        #     # Open the file in append mode and write the data
-        #     with open(output_file, "a") as f:
-        #         ratios_str = " ".join([f"{ratio.item()}" for ratio in explained_variance_ratio])
-        #         f.write(ratios_str + "\n") 
-        # # ======================================= #
-
-        w = min(r, h)
-        top_PCs = Vh[:w, :]  # Shape: (w, h)
-        # Projection: (s, k)
-        projection = torch.matmul(data_center, top_PCs.T)
-        importance_scores = projection.pow(2).sum(dim=1)
-        _, top_k_indices = torch.topk(importance_scores, k=k, largest=True, sorted=True)  # Shape: (k,)
-        return top_k_indices
-
-    def select_q_pca_svd(self, data: torch.Tensor, k: int) -> torch.Tensor:
-        """
-        Select top k sequence indices based on their contribution to the variance using PCA via SVD.
-        (For every b, n, select top k indices from seqlen)
-
-        Args:
-            data (torch.Tensor): Input tensor of shape (batch, num_head, seqlen, hidden).
-            k (int): Number of sequence indices to select.
-
-        Returns:
-            torch.Tensor: Indices of shape (batch, num_head, k) representing the selected sequence positions.
-        """
-        b, n, s, h = data.shape
-
-        data_centered = data - data.mean(dim=2, keepdim=True)  # Shape: (b, n, s, h)
-
-        data_reshaped = data_centered.view(b * n, s, h)  # Shape: (b*n, s, h)
-
-        # U: (b*n, s, s), S: (b*n, min(s, h)), Vh: (b*n, h, h)
-        U, S, Vh = torch.linalg.svd(data_reshaped, full_matrices=False)  # SVD is batched
-
-        top_PCs = Vh[:, :k, :]  # Shape: (b*n, k, h)
-
-        # Projection: (b*n, s, k)
-        projection = torch.matmul(data_reshaped, top_PCs.transpose(-2, -1))  # (b*n, s, k)
-
-        # Shape: (b*n, s)
-        importance_scores = projection.pow(2).sum(dim=2)  # Sum over the k principal components
-
-        # Indices with the highest scores are most important
-        _, top_k_indices = torch.topk(importance_scores, k=k, dim=1, largest=True, sorted=True)  # Shape: (b*n, k)
-
-        selected_indices = top_k_indices.view(b, n, k)  # Shape: (b, n, k)
-
-        return selected_indices
-
-    def select_q_pca2(self, data: torch.Tensor, r: int, k: int, write: bool):
-        b, n, s, h = data.shape
-        # Every b, n would choose a different set of indices tokens
-        indices = torch.zeros((b, n, k), device=data.device, dtype=torch.long)
-        for i in range(b):
-            for j in range(n):
-                indices[i, j] = self.pca_select(data[i, j], r, k, write)
-        return indices
-
-    def select_q_pca(self, x: torch.Tensor, k: int):
-        """
-        Select top k sequence indices based on their contribution to the variance using PCA.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape (batch, num_head, seqlen, hidden).
-            k (int): Number of sequence indices to select.
-
-        Returns:
-            torch.Tensor: Indices of shape (k,) representing the selected sequence positions.
-                --> no matter of the "batch" or "num_head" or "hidden" dimensions
-        """
-        # Step 1: Get the dimensions
-        batch, num_head, seqlen, hidden = x.shape
-        # print(f"Input shape: {x.shape}")
-
-        # New shape: (batch, num_head, hidden, seqlen)
-        x_permuted = x.permute(0, 1, 3, 2)
-        # print(f"Permuted shape: {x_permuted.shape}")
-
-        # New shape: (batch * num_head * hidden, seqlen)
-        x_reshaped = x_permuted.contiguous().view(-1, seqlen)
-        # print(f"Reshaped shape for PCA: {x_reshaped.shape}")
-
-        # Shape: (batch*num_head*hidden, 1)
-        mean = torch.mean(x_reshaped, dim=1, keepdim=True)
-        x_centered = x_reshaped - mean
-        # print(f"Data centered. Mean shape: {mean.shape}")
-
-        if x_centered.dtype != torch.float32:
-            x_centered = x_centered.to(torch.float32)
-            # print("Data cast to float32 for covariance computation.")
-
-        # Compute covariance matrix: (seqlen, seqlen)
-        covariance = torch.matmul(x_centered.T, x_centered) / (x_centered.size(0) - 1)
-        # print(f"Covariance matrix shape: {covariance.shape}")
-
-        try:
-            eigenvalues, eigenvectors = torch.linalg.eigh(covariance)
-        except RuntimeError as e:
-            # print(f"Eigen decomposition failed: {e}")
-            # As a fallback, move data to CPU and perform eigen decomposition
-            covariance_cpu = covariance.cpu()
-            eigenvalues_cpu, eigenvectors_cpu = torch.linalg.eigh(covariance_cpu)
-            eigenvalues = eigenvalues_cpu.to(covariance.device)
-            eigenvectors = eigenvectors_cpu.to(covariance.device)
-            # print("Eigen decomposition performed on CPU and moved back to original device.")
-
-        sorted_indices = torch.argsort(eigenvalues, descending=True)
-        top_eigenvectors = eigenvectors[:, sorted_indices[:k]]  # Shape: (seqlen, k)
-
-        importance_scores = torch.sum(top_eigenvectors**2, dim=1)  # Shape: (seqlen,)
-        # print(f"Importance scores shape: {importance_scores.shape}")
-
-        # Higher scores indicate higher contribution to variance
-        _, top_k_indices = torch.topk(importance_scores, k=k, largest=True, sorted=True)
-        # print(f"Top {k} indices: {top_k_indices}")
-
-        # Optionally, cast indices to long type if not already
-        top_k_indices = top_k_indices.long()
-
-        return top_k_indices
 
     def update(
         self,
+        query_states: torch.Tensor,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
         layer_idx: int,
@@ -240,6 +83,8 @@ class KVHashCache(Cache):
         if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
+            # record query_states
+            self.query_hash_vals[layer_idx] = self.get_hash_values(query_states, query_states.shape[-2])
         else:
             self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)

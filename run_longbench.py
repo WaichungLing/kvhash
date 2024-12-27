@@ -175,8 +175,6 @@ def main():
             recent_protect_budget=args.recent_protect_budget,
             num_planes=args.num_planes,
             device=args.device,
-            top_k=args.top_k,
-            top_rank=args.top_rank
         ).to(args.device)
 
     # Prepare dataset
