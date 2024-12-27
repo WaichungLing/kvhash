@@ -19,6 +19,8 @@ class KVHashCache(Cache):
 
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.query_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # NOTE: temporary
+        self.attn_score: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
 
         self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
@@ -102,6 +104,7 @@ class KVHashCache(Cache):
         self,
         key_states: torch.Tensor,
         value_states: torch.Tensor,
+        query_states: torch.Tensor,
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -109,6 +112,7 @@ class KVHashCache(Cache):
         if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
+            self.query_cache[layer_idx] = query_states
         else:
             self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
@@ -117,6 +121,10 @@ class KVHashCache(Cache):
             f"Mismatch in the sequence length of K and V Cache"
         )
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
+    
+    def update_attn(self, attn_scores: torch.Tensor, layer_idx: int):
+        if self.attn_score[layer_idx] is None:
+            self.attn_score[layer_idx] = attn_scores
 
     def evict(
         self,

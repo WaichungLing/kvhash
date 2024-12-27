@@ -73,7 +73,7 @@ def kv_hash_forward(
         if past_key_value is not None: #TODO add not self.config.enable_kvhash and
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(key_states, value_states, query_states, self.layer_idx, cache_kwargs)
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -88,10 +88,12 @@ def kv_hash_forward(
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
 
-        if self.config.enable_kvhash:
-            past_key_value.update_attn_sum(self.layer_idx, attn_weights)
-            if key_states.shape[2] > self.config.min_eviction_seqlen and past_key_value.is_eviction_needed(self.layer_idx):
-                past_key_value.evict(self.layer_idx)
+        past_key_value.update_attn(attn_weights, self.layer_idx)
+
+        # if self.config.enable_kvhash:
+        #     past_key_value.update_attn_sum(self.layer_idx, attn_weights)
+        #     if key_states.shape[2] > self.config.min_eviction_seqlen and past_key_value.is_eviction_needed(self.layer_idx):
+        #         past_key_value.evict(self.layer_idx)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(

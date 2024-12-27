@@ -2,6 +2,7 @@ import torch
 import os
 import json
 import warnings
+import numpy as np
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, DynamicCache
 
@@ -15,7 +16,7 @@ LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh"
                     "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
                     "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
 
-MAX_CONTEXT = 127*1024
+MAX_CONTEXT = 1*1024
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -57,7 +58,7 @@ def post_process(response, model_name):
     return response
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
-    idx = 1
+    idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
@@ -77,11 +78,6 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         else:
             input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
         context_length = input.input_ids.shape[-1]
-
-        if context_length > 10000:
-            print(f"===== skipping data[{idx}]")
-            continue
-        idx += 1
 
         if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
             output = model.generate(
@@ -108,10 +104,34 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         pred = post_process(pred, model_name)
         if past_key_value is not None:
             print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
-        past_key_value.clear()
+
+            # ======== get qka npy =========
+            qqq = past_key_value.query_cache
+            qqq_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in qqq]
+            np.save("query_state.npy", np.array(qqq_cpu, dtype=object))
+
+            aaa = past_key_value.attn_score
+            aaa_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in aaa]
+            np.save("attn_score.npy", np.array(aaa_cpu, dtype=object))
+
+            prefill_len = qqq_cpu[0].shape[2]
+
+            kkk = past_key_value.key_cache
+            kkk_cpu = [layer.to(dtype=torch.float32).cpu().numpy()[:,:,:prefill_len,:] for layer in kkk]
+            np.save("key_state.npy", np.array(kkk_cpu, dtype=object))
+
+            print(f"successfully saved. query {qqq_cpu[0].shape}, key {kkk_cpu[0].shape}")
+            # ==============================
+
+            past_key_value.clear()
+
+        if idx == 0:
+            break
+        idx += 1
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
             f.write('\n')
+
     # dist.destroy_process_group()
 
 def main():
@@ -195,29 +215,6 @@ def main():
         print("Load dataset done")
 
         get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, args.device, args.model_name, out_path)
-
-
-    # input_text = "Compare the Llama model and GPT model"
-    # max_length = 50
-    # inputs = tokenizer(
-    #     input_text, 
-    #     return_tensors="pt",
-    # ).to(args.device)
-
-    # # print(f"\nInput Text: {input_text} -- token: {inputs.input_ids.shape[1]}")
-    
-    # outputs = model.generate(
-    #     inputs.input_ids, 
-    #     max_new_tokens=max_length,
-    #     attention_mask=inputs.attention_mask,
-    #     use_cache=True,
-    #     past_key_values = past_key_value
-    # )
-    # generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    # # Print the result
-    # print(f"\nInput Text: {input_text} -- token: {inputs.input_ids.shape[1]}")
-    # print("Generated Text:", generated_text)
 
 
 if __name__ == "__main__":
