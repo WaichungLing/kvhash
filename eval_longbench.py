@@ -50,6 +50,7 @@ def parse_args(args=None):
 
 def scorer_e(dataset, predictions, answers, lengths, all_classes):
     scores = {"0-4k": [], "4-8k": [], "8k+": []}
+    ret = {}
     for prediction, ground_truths, length in zip(predictions, answers, lengths):
         score = 0.0
         if dataset in ["trec", "triviaqa", "samsum", "lsht"]:
@@ -63,12 +64,13 @@ def scorer_e(dataset, predictions, answers, lengths, all_classes):
         else:
             scores["8k+"].append(score)
     for key in scores.keys():
-        scores[key] = round(100 * np.mean(scores[key]), 2)
-    return scores
+        ret[key] = round(100 * np.mean(scores[key]), 2)
+    return ret
 
 
 def scorer(dataset, predictions, answers, all_classes):
     total_score = 0.0
+    all_scores = []
     for prediction, ground_truths in zip(predictions, answers):
         score = 0.0
         if dataset in ["trec", "triviaqa", "samsum", "lsht"]:
@@ -76,12 +78,14 @@ def scorer(dataset, predictions, answers, all_classes):
         for ground_truth in ground_truths:
             score = max(score, dataset2metric[dataset](prediction, ground_truth, all_classes=all_classes))
         total_score += score
-    return round(100 * total_score / len(predictions), 2)
+        all_scores.append(score)
+    return round(100 * total_score / len(predictions), 2), all_scores
 
 
 if __name__ == "__main__":
     args = parse_args()
     scores = dict()
+    all_scores = {}
     sub_dir = f"{args.model}-{args.cache_budget}"
     path = f"pred/{sub_dir}/"
     if args.e:
@@ -105,8 +109,11 @@ if __name__ == "__main__":
         if args.e:
             score = scorer_e(dataset, predictions, answers, lengths, all_classes)
         else:
-            score = scorer(dataset, predictions, answers, all_classes)
+            score, all_scores = scorer(dataset, predictions, answers, all_classes)
         scores[dataset] = score
     out_path = f"{path}/result.json"
     with open(out_path, "w") as f:
         json.dump(scores, f, ensure_ascii=False, indent=4)
+    out_path = f"{path}/all_scores.json"
+    with open(out_path, "w") as f:
+        json.dump(all_scores, f, ensure_ascii=False, indent=4)
