@@ -67,9 +67,6 @@ def kv_hash_forward(
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
-        if self.config.enable_kvhash and past_key_value is not None:
-            past_key_value.update_hash_values(self.layer_idx, key_states)
-
         if past_key_value is not None: #TODO add not self.config.enable_kvhash and
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
@@ -88,7 +85,7 @@ def kv_hash_forward(
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
 
-        past_key_value.update_attn(attn_weights, self.layer_idx)
+        past_key_value.update_attn(query_states, key_states, attn_weights, self.layer_idx)
 
         # if self.config.enable_kvhash:
         #     past_key_value.update_attn_sum(self.layer_idx, attn_weights)

@@ -16,7 +16,7 @@ LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh"
                     "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
                     "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
 
-MAX_CONTEXT = 1*1024
+MAX_CONTEXT = 2*1024
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -58,6 +58,7 @@ def post_process(response, model_name):
     return response
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
+    file_name = f'pred/{dataset}_sparsity.jsonl'
     idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
@@ -105,32 +106,41 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         if past_key_value is not None:
             print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
 
+            # ======= unicache expr ========
+            with open(file_name, "a", encoding="utf-8") as f:
+                json.dump({'gt': past_key_value.attn_sparsity, 
+                           'tail': past_key_value.attn_sparsity_tail,
+                           'pca_qk': past_key_value.attn_sparsity_pca_qk,
+                           'pca_qq': past_key_value.attn_sparsity_pca_qq}, f, ensure_ascii=False)
+                f.write('\n')
+            # ==============================
+
             # ======== get qka npy =========
-            qqq = past_key_value.query_cache
-            qqq_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in qqq]
-            np.save("query_state.npy", np.array(qqq_cpu, dtype=object))
+            # qqq = past_key_value.query_cache
+            # qqq_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in qqq]
+            # np.save("query_state.npy", np.array(qqq_cpu, dtype=object))
 
-            aaa = past_key_value.attn_score
-            aaa_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in aaa]
-            np.save("attn_score.npy", np.array(aaa_cpu, dtype=object))
+            # aaa = past_key_value.attn_score
+            # aaa_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in aaa]
+            # np.save("attn_score.npy", np.array(aaa_cpu, dtype=object))
 
-            prefill_len = qqq_cpu[0].shape[2]
+            # prefill_len = qqq_cpu[0].shape[2]
 
-            kkk = past_key_value.key_cache
-            kkk_cpu = [layer.to(dtype=torch.float32).cpu().numpy()[:,:,:prefill_len,:] for layer in kkk]
-            np.save("key_state.npy", np.array(kkk_cpu, dtype=object))
+            # kkk = past_key_value.key_cache
+            # kkk_cpu = [layer.to(dtype=torch.float32).cpu().numpy()[:,:,:prefill_len,:] for layer in kkk]
+            # np.save("key_state.npy", np.array(kkk_cpu, dtype=object))
 
-            print(f"successfully saved. query {qqq_cpu[0].shape}, key {kkk_cpu[0].shape}")
+            # print(f"successfully saved. query {qqq_cpu[0].shape}, key {kkk_cpu[0].shape}")
             # ==============================
 
             past_key_value.clear()
 
-        if idx == 0:
-            break
+        # if idx == 0:
+        #     break
         idx += 1
-        with open(out_path, "a", encoding="utf-8") as f:
-            json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
-            f.write('\n')
+        # with open(out_path, "a", encoding="utf-8") as f:
+        #     json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
+        #     f.write('\n')
 
     # dist.destroy_process_group()
 
@@ -190,7 +200,6 @@ def main():
             cache_budget = args.cache_budget,
             sink_protect_tokens = args.sink_protect_tokens,
             recent_protect_budget = args.recent_protect_budget,
-            num_planes=args.num_planes
         ).to(args.device)
 
     # Prepare dataset

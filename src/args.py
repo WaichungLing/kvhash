@@ -3,7 +3,7 @@ import torch
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run KVHash Cache Compression")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B-Instruct",
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-3B-Instruct",
                         help="The Hugging Face model name to load.")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device to run the model on (cuda or cpu).")
@@ -20,7 +20,8 @@ def parse_args():
     parser.add_argument("--sink_protect_tokens", type=int, default=128, help="number of tokens to be protect at the head") # put back 256
     parser.add_argument("--recent_protect_budget", type=int, default=0.01, help="ration of tokens to be protect at the end") # put back 0.01
     parser.add_argument("--min_eviction_seqlen", type=int, default=1024, help="sequence length that starts eviction") # put back 2048
-    parser.add_argument("--num_planes", type=int, default=4, help="number of division plane")
+    parser.add_argument("--top_k", type=int, default=64, help="top k query tokens selected for proxy")
+    parser.add_argument("--top_rank", type=int, default=20, help="top rank for PCA reduction")
     # tasks:
-    parser.add_argument("--task", type=str, default="multi_news", help="evaluation task")
+    parser.add_argument("--task", type=str, default="narrativeqa", help="evaluation task")
     return parser.parse_args()

@@ -1,31 +1,28 @@
 import torch
+import math
 from typing import Any, Dict, List, Optional, Tuple
 from transformers.cache_utils import Cache
+from torch import nn
 
 class KVHashCache(Cache):
     def __init__(self, 
                  config, 
                  cache_budget,
                  sink_protect_tokens,
-                 recent_protect_budget,
-                 num_planes: int = 4) -> None:
+                 recent_protect_budget) -> None:
         super().__init__()
         self.config = config
         self.cache_budget = cache_budget
         self.sink_protect_tokens = sink_protect_tokens
         self.recent_protect_budget = recent_protect_budget
-        self.num_planes = num_planes
+        
         self._seen_tokens = 0
-
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.query_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # NOTE: temporary
-        self.attn_score: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
-
-        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.register_buffer("div_planes", torch.randn((self.num_planes, self.config.head_dim), dtype=torch.float32))
-        self.register_buffer("powers_of_two", 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.float32))
+        self.attn_sparsity: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
+        self.attn_sparsity_tail: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
+        self.attn_sparsity_pca_qk: List[torch.Tensor] = [None] * self.config.num_hidden_layers # NOTE: temporary
+        self.attn_sparsity_pca_qq: List[torch.Tensor] = [None] * self.config.num_hidden_layers # NOTE: temporary
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -51,54 +48,6 @@ class KVHashCache(Cache):
         to the number of layers in the model.
         """
         return len(self.key_cache)
-    
-    def update_attn_sum(self, layer_idx, attn_scores):  # Shape: (b, num_head, q_len, k_len)
-        summation = torch.sum(attn_scores, dim=2)  # Shape: (b, num_head, k_len)
-        # GQA
-        # if layer_idx == 0:
-        #     print(f'==== attn score shape {attn_scores.shape}')
-        #     print(f'==== attn score {attn_scores[:,0:4,:,:]}')
-        n_per_group = self.config.num_attention_heads // self.config.num_key_value_heads
-        # if layer_idx == 0:
-        #     print(f'======== summation {summation.shape} ')
-        #     print(f'======== summation {summation[:,0:4,:]}')
-        #     print(f'========n_per_group {n_per_group}')
-        if n_per_group > 1:
-            temp = summation.view(summation.shape[0], self.config.num_key_value_heads, n_per_group, -1)
-            summation = temp.sum(dim=2)
-        # if layer_idx == 0:
-        #     print(f"===== summation.shape = {summation.shape}")
-        #     print(f'===== summation after {summation[:,0,:]}')
-
-        if self.attn_sum[layer_idx] is None:
-            self.attn_sum[layer_idx] = summation
-        else:
-            self.attn_sum[layer_idx] += summation[:, :, :self.attn_sum[layer_idx].shape[-1]]
-            q_len = summation.shape[-1] - self.attn_sum[layer_idx].shape[-1]
-            new_in = summation[:, :, -q_len:]
-            self.attn_sum[layer_idx] = torch.cat([self.attn_sum[layer_idx], new_in], dim=2)
-        # if layer_idx == 0 and self.attn_sum[layer_idx] is not None:
-        #     print(f"attn_sum shape: {self.attn_sum[layer_idx].shape}")
-
-    def update_hash_values(self, layer_idx, key_states):   # Shape: (b, num_head, q_len, k_len)
-        if layer_idx == 0:
-            self._seen_tokens += key_states.shape[-2]
-
-        hash_bits = torch.matmul(key_states, self.div_planes.transpose(-1, -2))
-        hash_bits = (hash_bits >= 0).to(torch.float32)
-        hash_vals = torch.matmul(hash_bits, self.powers_of_two)  # Shape: (b, num_head, s_len)
-        # if layer_idx == 0:
-        #     print(f"======= hash_bits shape {hash_bits.shape} === {hash_bits[:,0,:,:]}")
-        #     print(f"======= hash_vals shape {hash_vals.shape} === {hash_vals[:,0,:]}")
-
-        if self.hash_values[layer_idx] is None:
-            # Initialize hash_values if it is None
-            self.hash_values[layer_idx] = hash_vals
-        else:
-            q_len = key_states.shape[2]
-            self.hash_values[layer_idx] = torch.cat([self.hash_values[layer_idx], hash_vals[:, :, -q_len:]], dim=2)
-            # if layer_idx == 0:
-            #     print(f'====== self.hash_values shape {self.hash_values[layer_idx].shape} === {self.hash_values[layer_idx]}')
 
     def update(
         self,
@@ -108,11 +57,12 @@ class KVHashCache(Cache):
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if layer_idx == 0:
+            self._seen_tokens += key_states.shape[-2]
         
         if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
-            self.query_cache[layer_idx] = query_states
         else:
             self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
@@ -122,9 +72,83 @@ class KVHashCache(Cache):
         )
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
     
-    def update_attn(self, attn_scores: torch.Tensor, layer_idx: int):
-        if self.attn_score[layer_idx] is None:
-            self.attn_score[layer_idx] = attn_scores
+    import torch
+
+    def pca_select(self, query: torch.Tensor, key: torch.Tensor, r:int,  k: int):     # select proxy from query
+        s, h = query.shape    
+        pca_center = key - key.mean(dim=0)
+        if pca_center.dtype != torch.float32:
+            pca_center = pca_center.to(torch.float32)
+        U, S, Vh = torch.linalg.svd(pca_center, full_matrices=False)  # Vh: (h, h)
+        w = min(r, h)
+        top_PCs = (S[:w, None] * Vh[:w, :])
+        projection = torch.matmul(query, top_PCs.T)
+        importance_scores = projection.pow(2).sum(dim=1)
+        _, top_k_indices = torch.topk(importance_scores, k=k, largest=True)
+        return top_k_indices
+    
+    def update_attn(self, query_states: torch.Tensor, key_states: torch.Tensor, attn_scores: torch.Tensor, layer_idx: int):
+        if self.attn_sparsity[layer_idx] is not None:   # only prefill
+            return
+        
+        sparsities = []
+        for i in range(self.config.num_attention_heads):
+            attn_per_head = attn_scores[0, i]
+            mask = torch.tril(torch.ones_like(attn_per_head, dtype=torch.bool))
+            lower_triangle_values = attn_per_head[mask]
+            min_val = torch.min(lower_triangle_values)
+            max_val = torch.max(lower_triangle_values)
+            threshold = min_val + 0.001 * (max_val - min_val)
+            sparsity = torch.sum(torch.abs(lower_triangle_values) < threshold).item() / lower_triangle_values.numel()
+            sparsities.append(sparsity)
+        self.attn_sparsity[layer_idx] = sparsities
+
+        sparsities_tail = []
+        query_proxy = query_states[:,:,-64:,:]
+        attn_weights = torch.matmul(query_proxy, key_states.transpose(2, 3)) / math.sqrt(self.config.head_dim)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_sum = torch.sum(attn_weights, dim=-2)
+        for i in range(self.config.num_attention_heads):
+            attn_sum_per_head = attn_sum[0, i]
+            min_val = torch.min(attn_sum_per_head)
+            max_val = torch.max(attn_sum_per_head)
+            threshold = min_val + 0.001 * (max_val - min_val)
+            sparsity_tail = torch.sum(attn_sum_per_head < threshold).item() / query_states.shape[2]
+            sparsities_tail.append(sparsity_tail)
+        self.attn_sparsity_tail[layer_idx] = sparsities_tail
+
+        sparsities_pca_qk = []
+        for i in range(self.config.num_attention_heads):
+            one_q = query_states[0,i]
+            one_k = key_states[0,i]
+            indices = self.pca_select(one_q, one_k ,4, 64)
+            query_proxy = one_q[indices,:]
+            attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
+            attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            attn_sum = torch.sum(attn, dim=0)
+            min_val = torch.min(attn_sum)
+            max_val = torch.max(attn_sum)
+            threshold = min_val + 0.001 * (max_val - min_val)
+            sparsity_pca_qk = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
+            sparsities_pca_qk.append(sparsity_pca_qk)
+        self.attn_sparsity_pca_qk[layer_idx] = sparsities_pca_qk
+
+        sparsities_pca_qq = []
+        for i in range(self.config.num_attention_heads):
+            one_q = query_states[0,i]
+            # one_k = torch.tensor(key_states[0,i])
+            indices = self.pca_select(one_q, one_q ,4, 64)
+            query_proxy = one_q[indices,:]
+            attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
+            attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            attn_sum = torch.sum(attn, dim=0)
+            min_val = torch.min(attn_sum)
+            max_val = torch.max(attn_sum)
+            threshold = min_val + 0.001 * (max_val - min_val)
+            sparsity_pca_qq = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
+            sparsities_pca_qq.append(sparsity_pca_qq)
+        self.attn_sparsity_pca_qq[layer_idx] = sparsities_pca_qq
+
 
     def evict(
         self,
@@ -192,16 +216,6 @@ class KVHashCache(Cache):
             self.attn_sum[layer_idx] = self.attn_sum[layer_idx].gather(dim=2, index=expanded_indices_hash_attn)
 
             assert self.key_cache[layer_idx].shape[2] == valid_indices.shape[1], "Mismatch in q_len after eviction!"
-            # if layer_idx == 0:
-            #     print(f"After Eviction: key_cache shape {self.key_cache[layer_idx].shape}, value_cache shape {self.value_cache[layer_idx].shape}")
-            return
-                    # if torch.cuda.is_available():
-            #     streams = [torch.cuda.Stream() for _ in range(evict_hash.shape[1])]
-            #     for i, stream in enumerate(streams):
-            #         with torch.cuda.stream(stream):
-            #             keep_ids.append(self.head_eviction(evict_hash, evict_attn, i, evict_tokens))
-            #     torch.cuda.synchronize() 
-            # else:
         else:
             return
         
@@ -241,8 +255,10 @@ class KVHashCache(Cache):
         self._seen_tokens = 0
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        self.attn_sparsity: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
+        self.attn_sparsity_tail: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
+        self.attn_sparsity_pca_qk: List[torch.Tensor] = [None] * self.config.num_hidden_layers # NOTE: temporary
+        self.attn_sparsity_pca_qq: List[torch.Tensor] = [None] * self.config.num_hidden_layers # NOTE: temporary
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
@@ -251,9 +267,3 @@ class KVHashCache(Cache):
     def get_max_cache_shape(self) -> Optional[int]:
         """Returns the maximum sequence length of the cache object. DynamicCache does not have a maximum length."""
         return None
-    
-    def evict_h2o(
-        self,
-        layer_idx: int
-    ):
-        pass
