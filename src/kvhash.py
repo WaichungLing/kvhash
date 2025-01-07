@@ -136,7 +136,7 @@ class KVHashCache(Cache):
         sparsities_pca_qq = []
         for i in range(self.config.num_attention_heads):
             one_q = query_states[0,i]
-            # one_k = torch.tensor(key_states[0,i])
+            one_k = torch.tensor(key_states[0,i])
             indices = self.pca_select(one_q, one_q ,4, 64)
             query_proxy = one_q[indices,:]
             attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
