@@ -23,5 +23,5 @@ def parse_args():
     parser.add_argument("--top_k", type=int, default=64, help="top k query tokens selected for proxy")
     parser.add_argument("--top_rank", type=int, default=20, help="top rank for PCA reduction")
     # tasks:
-    parser.add_argument("--task", type=str, default="narrativeqa", help="evaluation task")
+    parser.add_argument("--task", type=str, default="all", help="evaluation task")
     return parser.parse_args()

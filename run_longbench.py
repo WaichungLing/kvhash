@@ -13,11 +13,13 @@ from src.kvhash import KVHashCache
 from config import tokens
 from datasets import load_dataset
 
-LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh", "hotpotqa", "2wikimqa", "musique", \
-                    "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
-                    "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
+# LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh", "hotpotqa", "2wikimqa", "musique", \
+#                     "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
+#                     "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
 
-MAX_CONTEXT = 2*1024
+LONGBENCH_TASKS = ["samsum"]
+
+MAX_CONTEXT = 4*1024
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -59,7 +61,7 @@ def post_process(response, model_name):
     return response
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
-    file_name = f'pred/{dataset}_sparsity_3.jsonl'
+    file_name = f'pred/sparsity/{dataset}_sparsity.jsonl'
     idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
@@ -87,6 +89,8 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                 **input,
                 max_new_tokens=max_gen,
                 min_length=context_length+1,
+                use_cache=True,
+                past_key_values = past_key_value,
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
             )[0]
         else:
