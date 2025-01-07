@@ -37,7 +37,7 @@ LONGBENCH_TASKS = [
     "repobench-p",
 ]
 
-MAX_CONTEXT = 127 * 1024
+MAX_CONTEXT = 8 * 1024
 
 
 def seed_everything(seed):
@@ -123,28 +123,11 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         pred = post_process(pred, model_name)
         if past_key_value is not None:
             print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
-
-            # ======== get qk npy =========
-            qqq = past_key_value.query_cache
-            qqq_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in qqq]
-            np.save("query_state.npy", np.array(qqq_cpu, dtype=object))
-
-            prefill_len = qqq_cpu[0].shape[2]
-
-            kkk = past_key_value.key_cache
-            kkk_cpu = [layer.to(dtype=torch.float32).cpu().numpy()[:,:,:prefill_len,:] for layer in kkk]
-            np.save("key_state.npy", np.array(kkk_cpu, dtype=object))
-
-            print(f"successfully saved. query {qqq_cpu[0].shape}, key {kkk_cpu[0].shape}")
-            # ==============================
-
             past_key_value.clear()
 
-        # with open(out_path, "a", encoding="utf-8") as f:
-        #     json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
-        #     f.write("\n")
-        if idx == 0:
-            break
+        with open(out_path, "a", encoding="utf-8") as f:
+            json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
+            f.write("\n")
         idx += 1
     # dist.destroy_process_group()
 
@@ -193,7 +176,6 @@ def main():
             cache_budget=args.cache_budget,
             sink_protect_tokens=args.sink_protect_tokens,
             recent_protect_budget=args.recent_protect_budget,
-            num_planes=args.num_planes,
             device=args.device,
             top_k=args.top_k,
             top_rank=args.top_rank
