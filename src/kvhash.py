@@ -104,7 +104,10 @@ class KVHashCache(Cache):
         self.attn_sparsity[layer_idx] = sparsities
 
         sparsities_tail = []
-        query_proxy = query_states[:,:,-64:,:]
+        # query_proxy = query_states[:,:,-64:,:]
+        initial_32 = query_states[:, :, :32, :]
+        last_32 = query_states[:, :, -32:, :]
+        query_proxy = torch.cat([initial_32, last_32], dim=2)
         attn_weights = torch.matmul(query_proxy, key_states.transpose(2, 3)) / math.sqrt(self.config.head_dim)
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_sum = torch.sum(attn_weights, dim=-2)
@@ -117,37 +120,37 @@ class KVHashCache(Cache):
             sparsities_tail.append(sparsity_tail)
         self.attn_sparsity_tail[layer_idx] = sparsities_tail
 
-        sparsities_pca_qk = []
-        for i in range(self.config.num_attention_heads):
-            one_q = query_states[0,i]
-            one_k = key_states[0,i]
-            indices = self.pca_select(one_q, one_k ,4, 64)
-            query_proxy = one_q[indices,:]
-            attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
-            attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
-            attn_sum = torch.sum(attn, dim=0)
-            min_val = torch.min(attn_sum)
-            max_val = torch.max(attn_sum)
-            threshold = min_val + 0.001 * (max_val - min_val)
-            sparsity_pca_qk = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
-            sparsities_pca_qk.append(sparsity_pca_qk)
-        self.attn_sparsity_pca_qk[layer_idx] = sparsities_pca_qk
+        # sparsities_pca_qk = []
+        # for i in range(self.config.num_attention_heads):
+        #     one_q = query_states[0,i]
+        #     one_k = key_states[0,i]
+        #     indices = self.pca_select(one_q, one_k ,4, 64)
+        #     query_proxy = one_q[indices,:]
+        #     attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
+        #     attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        #     attn_sum = torch.sum(attn, dim=0)
+        #     min_val = torch.min(attn_sum)
+        #     max_val = torch.max(attn_sum)
+        #     threshold = min_val + 0.001 * (max_val - min_val)
+        #     sparsity_pca_qk = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
+        #     sparsities_pca_qk.append(sparsity_pca_qk)
+        # self.attn_sparsity_pca_qk[layer_idx] = sparsities_pca_qk
 
-        sparsities_pca_qq = []
-        for i in range(self.config.num_attention_heads):
-            one_q = query_states[0,i]
-            one_k = torch.tensor(key_states[0,i])
-            indices = self.pca_select(one_q, one_q ,4, 64)
-            query_proxy = one_q[indices,:]
-            attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
-            attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
-            attn_sum = torch.sum(attn, dim=0)
-            min_val = torch.min(attn_sum)
-            max_val = torch.max(attn_sum)
-            threshold = min_val + 0.001 * (max_val - min_val)
-            sparsity_pca_qq = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
-            sparsities_pca_qq.append(sparsity_pca_qq)
-        self.attn_sparsity_pca_qq[layer_idx] = sparsities_pca_qq
+        # sparsities_pca_qq = []
+        # for i in range(self.config.num_attention_heads):
+        #     one_q = query_states[0,i]
+        #     one_k = torch.tensor(key_states[0,i])
+        #     indices = self.pca_select(one_q, one_q ,4, 64)
+        #     query_proxy = one_q[indices,:]
+        #     attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
+        #     attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        #     attn_sum = torch.sum(attn, dim=0)
+        #     min_val = torch.min(attn_sum)
+        #     max_val = torch.max(attn_sum)
+        #     threshold = min_val + 0.001 * (max_val - min_val)
+        #     sparsity_pca_qq = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
+        #     sparsities_pca_qq.append(sparsity_pca_qq)
+        # self.attn_sparsity_pca_qq[layer_idx] = sparsities_pca_qq
 
 
     def evict(
