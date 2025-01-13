@@ -13,11 +13,9 @@ from src.kvhash import KVHashCache
 from config import tokens
 from datasets import load_dataset
 
-# LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh", "hotpotqa", "2wikimqa", "musique", \
-#                     "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
-#                     "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
-
-LONGBENCH_TASKS = ["samsum"]
+LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh", "hotpotqa", "2wikimqa", "musique", \
+                    "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
+                    "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
 
 MAX_CONTEXT = 4*1024
 
@@ -61,7 +59,7 @@ def post_process(response, model_name):
     return response
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
-    file_name = f'pred/sparsity/{dataset}_sparsity.jsonl'
+    file_name = f'pred/sparsity_hash/{dataset}_sparsity.jsonl'
     idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
@@ -115,9 +113,10 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
             # ======= unicache expr ========
             with open(file_name, "a", encoding="utf-8") as f:
                 json.dump({'gt': past_key_value.attn_sparsity, 
-                           'tail': past_key_value.attn_sparsity_tail,
-                           'pca_qk': past_key_value.attn_sparsity_pca_qk,
-                           'pca_qq': past_key_value.attn_sparsity_pca_qq}, f, ensure_ascii=False)
+                           'tail': past_key_value.attn_sparstiy_hash
+                        #    'pca_qk': past_key_value.attn_sparsity_pca_qk,
+                        #    'pca_qq': past_key_value.attn_sparsity_pca_qq
+                        }, f, ensure_ascii=False)
                 f.write('\n')
             # ==============================
 
