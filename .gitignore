@@ -6,3 +6,5 @@ pred/
 *.txt
 config/tokens.py
 *.npy
+result
+test
