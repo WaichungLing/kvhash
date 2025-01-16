@@ -67,7 +67,7 @@ def kv_hash_forward(
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
-        past_key_value.update_hash_values(self.layer_idx, query_states)
+        # past_key_value.update_hash_values(self.layer_idx, query_states)
 
         if past_key_value is not None: #TODO add not self.config.enable_kvhash and
             # sin and cos are specific to RoPE models; cache_position needed for the static cache

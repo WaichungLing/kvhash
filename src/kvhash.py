@@ -23,10 +23,10 @@ class KVHashCache(Cache):
         self.attn_sparsity_tail: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
         self.attn_sparsity_pca_qk: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # NOTE: temporary
         self.attn_sparsity_pca_qq: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # NOTE: temporary
-        self.attn_sparstiy_hash:  List[torch.Tensor] = [None] * self.config.num_hidden_layers   # NOTE: temporary
-        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers           # NOTE: temporary
-        self.register_buffer("div_planes", torch.randn((8, self.config.head_dim), dtype=torch.float32))    # NOTE: temporary
-        self.register_buffer("powers_of_two", 2 ** torch.arange(7, -1, -1, dtype=torch.float32))
+        # self.attn_sparstiy_hash:  List[torch.Tensor] = [None] * self.config.num_hidden_layers   # NOTE: temporary
+        # self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers           # NOTE: temporary
+        # self.register_buffer("div_planes", torch.randn((8, self.config.head_dim), dtype=torch.float32))    # NOTE: temporary
+        # self.register_buffer("powers_of_two", 2 ** torch.arange(7, -1, -1, dtype=torch.float32))
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -84,18 +84,22 @@ class KVHashCache(Cache):
         )
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
-    def pca_select(self, query: torch.Tensor, key: torch.Tensor, r:int,  k: int):     # select proxy from query
+    def pca_select(self, query: torch.Tensor, key: torch.Tensor, r:int,  total: int, latest: int):     # select proxy from query
         s, h = query.shape    
         pca_center = key - key.mean(dim=0)
         if pca_center.dtype != torch.float32:
             pca_center = pca_center.to(torch.float32)
         U, S, Vh = torch.linalg.svd(pca_center, full_matrices=False)  # Vh: (h, h)
         w = min(r, h)
-        top_PCs = (S[:w, None] * Vh[:w, :])
-        projection = torch.matmul(query, top_PCs.T)
-        importance_scores = projection.pow(2).sum(dim=1)
-        _, top_k_indices = torch.topk(importance_scores, k=k, largest=True)
-        return top_k_indices
+        top_PCs = (S[:w, None] * Vh[:w, :])  # (r, h)
+        projection = torch.matmul(query, top_PCs.T)  # (s, r)
+        importance_scores = projection.pow(2).sum(dim=1)  # (s,)
+        _, top_k_importance_indices = torch.topk(importance_scores, k=total, largest=True)
+        last_16_indices = torch.arange(s - latest, s, device=key.device)
+        top_k_importance_indices = top_k_importance_indices[~torch.isin(top_k_importance_indices, last_16_indices)]
+        remaining_top_indices = top_k_importance_indices[:total - latest]
+        combined_indices = torch.cat([remaining_top_indices, last_16_indices])
+        return combined_indices
     
     def update_attn(self, query_states: torch.Tensor, key_states: torch.Tensor, attn_scores: torch.Tensor, layer_idx: int):
         if self.attn_sparsity[layer_idx] is not None:   # only prefill
@@ -130,64 +134,64 @@ class KVHashCache(Cache):
         #     sparsities_tail.append(sparsity_tail)
         # self.attn_sparsity_tail[layer_idx] = sparsities_tail
 
-        # sparsities_pca_qk = []
-        # for i in range(self.config.num_attention_heads):
-        #     one_q = query_states[0,i]
-        #     one_k = key_states[0,i]
-        #     indices = self.pca_select(one_q, one_k ,4, 64)
-        #     query_proxy = one_q[indices,:]
-        #     attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
-        #     attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        #     attn_sum = torch.sum(attn, dim=0)
-        #     min_val = torch.min(attn_sum)
-        #     max_val = torch.max(attn_sum)
-        #     threshold = min_val + 0.001 * (max_val - min_val)
-        #     sparsity_pca_qk = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
-        #     sparsities_pca_qk.append(sparsity_pca_qk)
-        # self.attn_sparsity_pca_qk[layer_idx] = sparsities_pca_qk
-
-        # sparsities_pca_qq = []
-        # for i in range(self.config.num_attention_heads):
-        #     one_q = query_states[0,i]
-        #     one_k = torch.tensor(key_states[0,i])
-        #     indices = self.pca_select(one_q, one_q ,4, 64)
-        #     query_proxy = one_q[indices,:]
-        #     attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
-        #     attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        #     attn_sum = torch.sum(attn, dim=0)
-        #     min_val = torch.min(attn_sum)
-        #     max_val = torch.max(attn_sum)
-        #     threshold = min_val + 0.001 * (max_val - min_val)
-        #     sparsity_pca_qq = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
-        #     sparsities_pca_qq.append(sparsity_pca_qq)
-        # self.attn_sparsity_pca_qq[layer_idx] = sparsities_pca_qq
-
-        sparsities_hash = []
+        sparsities_pca_qk = []
         for i in range(self.config.num_attention_heads):
-            last_16 = query_states[0, i, -16:, :]               # Shape: (16, query_dim)
-            q_hash = self.hash_values[layer_idx][0,i,:-16]
-            unique_values, counts = torch.unique(q_hash, return_counts=True)
-            frequency_distribution = dict(zip(unique_values.tolist(), counts.tolist()))
-            # if i == 0:
-            #     print(frequency_distribution)
-            probabilities = torch.tensor([frequency_distribution[val.item()] for val in q_hash], dtype=torch.float32)
-            probabilities /= probabilities.sum()
-            indices = torch.multinomial(probabilities, 48, replacement=False)
-            sampled_queries = query_states[0, i, indices, :]  # Shape: (48, query_dim)
-            query_proxy = torch.cat((last_16, sampled_queries), dim=0) # Shape (64, h_dim)
-            # if i == 0:
-            #     print(indices)
-
-            one_k = key_states[0,i] # Shape (4096, h_dim)
+            one_q = query_states[0,i]
+            one_k = key_states[0,i]
+            indices = self.pca_select(one_q, one_k ,4, 64, 16)
+            query_proxy = one_q[indices,:]
             attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
             attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
             attn_sum = torch.sum(attn, dim=0)
             min_val = torch.min(attn_sum)
             max_val = torch.max(attn_sum)
             threshold = min_val + 0.001 * (max_val - min_val)
-            sparsity_hash = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
-            sparsities_hash.append(sparsity_hash)
-        self.attn_sparstiy_hash[layer_idx] = sparsities_hash
+            sparsity_pca_qk = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
+            sparsities_pca_qk.append(sparsity_pca_qk)
+        self.attn_sparsity_pca_qk[layer_idx] = sparsities_pca_qk
+
+        sparsities_pca_qq = []
+        for i in range(self.config.num_attention_heads):
+            one_q = query_states[0,i]
+            one_k = key_states[0,i]
+            indices = self.pca_select(one_q, one_q ,4, 64, 16)
+            query_proxy = one_q[indices,:]
+            attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
+            attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            attn_sum = torch.sum(attn, dim=0)
+            min_val = torch.min(attn_sum)
+            max_val = torch.max(attn_sum)
+            threshold = min_val + 0.001 * (max_val - min_val)
+            sparsity_pca_qq = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
+            sparsities_pca_qq.append(sparsity_pca_qq)
+        self.attn_sparsity_pca_qq[layer_idx] = sparsities_pca_qq
+
+        # sparsities_hash = []
+        # for i in range(self.config.num_attention_heads):
+        #     last_16 = query_states[0, i, -16:, :]               # Shape: (16, query_dim)
+        #     q_hash = self.hash_values[layer_idx][0,i,:-16]
+        #     unique_values, counts = torch.unique(q_hash, return_counts=True)
+        #     frequency_distribution = dict(zip(unique_values.tolist(), counts.tolist()))
+        #     # if i == 0:
+        #     #     print(frequency_distribution)
+        #     probabilities = torch.tensor([frequency_distribution[val.item()] for val in q_hash], dtype=torch.float32)
+        #     probabilities /= probabilities.sum()
+        #     indices = torch.multinomial(probabilities, 48, replacement=False)
+        #     sampled_queries = query_states[0, i, indices, :]  # Shape: (48, query_dim)
+        #     query_proxy = torch.cat((last_16, sampled_queries), dim=0) # Shape (64, h_dim)
+        #     # if i == 0:
+        #     #     print(indices)
+
+        #     one_k = key_states[0,i] # Shape (4096, h_dim)
+        #     attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
+        #     attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        #     attn_sum = torch.sum(attn, dim=0)
+        #     min_val = torch.min(attn_sum)
+        #     max_val = torch.max(attn_sum)
+        #     threshold = min_val + 0.001 * (max_val - min_val)
+        #     sparsity_hash = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
+        #     sparsities_hash.append(sparsity_hash)
+        # self.attn_sparstiy_hash[layer_idx] = sparsities_hash
 
     def evict(
         self,
@@ -298,9 +302,9 @@ class KVHashCache(Cache):
         self.attn_sparsity_tail: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
         self.attn_sparsity_pca_qk: List[torch.Tensor] = [None] * self.config.num_hidden_layers # NOTE: temporary
         self.attn_sparsity_pca_qq: List[torch.Tensor] = [None] * self.config.num_hidden_layers # NOTE: temporary
-        self.attn_sparstiy_hash: List[torch.Tensor] = [None] * self.config.num_hidden_layers # NOTE: temporary
-        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # NOTE: temporary
-        self.div_planes = torch.randn((8, self.config.head_dim), dtype=torch.float32, device=self.div_planes.device)
+        # self.attn_sparstiy_hash: List[torch.Tensor] = [None] * self.config.num_hidden_layers # NOTE: temporary
+        # self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # NOTE: temporary
+        # self.div_planes = torch.randn((8, self.config.head_dim), dtype=torch.float32, device=self.div_planes.device)
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
