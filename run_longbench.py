@@ -59,7 +59,7 @@ def post_process(response, model_name):
     return response
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
-    file_name = f'pred/sparsity_pca/{dataset}_sparsity.jsonl'
+    file_name = f'pred/sparsity_pca_32/{dataset}_sparsity.jsonl'
     idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)

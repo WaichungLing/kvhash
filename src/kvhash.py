@@ -138,7 +138,7 @@ class KVHashCache(Cache):
         for i in range(self.config.num_attention_heads):
             one_q = query_states[0,i]
             one_k = key_states[0,i]
-            indices = self.pca_select(one_q, one_k ,4, 64, 16)
+            indices = self.pca_select(one_q, one_k ,4, 64, 32)
             query_proxy = one_q[indices,:]
             attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
             attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
@@ -154,7 +154,7 @@ class KVHashCache(Cache):
         for i in range(self.config.num_attention_heads):
             one_q = query_states[0,i]
             one_k = key_states[0,i]
-            indices = self.pca_select(one_q, one_q ,4, 64, 16)
+            indices = self.pca_select(one_q, one_q ,4, 64, 32)
             query_proxy = one_q[indices,:]
             attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
             attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)

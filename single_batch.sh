@@ -5,6 +5,6 @@
 #SBATCH --time=900
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=wling@comp.nus.edu.sg
-#SBATCH --gres=gpu:a100-80:1
+#SBATCH --gres=gpu:h100-47:1
 
 srun python run_longbench.py >kv.out 2>kv.err
