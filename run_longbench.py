@@ -113,9 +113,9 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
             # ======= unicache expr ========
             with open(file_name, "a", encoding="utf-8") as f:
                 json.dump({'gt': past_key_value.attn_sparsity, 
-                        #    'tail': past_key_value.attn_sparsity_tail
-                        #    'pca_qk': past_key_value.attn_sparsity_pca_qk,
-                        #    'pca_qq': past_key_value.attn_sparsity_pca_qq
+                           # 'tail': past_key_value.attn_sparstiy_hash
+                           'pca_qk': past_key_value.attn_sparsity_pca_qk,
+                           'pca_qq': past_key_value.attn_sparsity_pca_qq
                         }, f, ensure_ascii=False)
                 f.write('\n')
             # ==============================
