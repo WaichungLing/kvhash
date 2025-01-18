@@ -266,6 +266,7 @@ def main():
             cache_budget=args.cache_budget,
             sink_protect_tokens=args.sink_protect_tokens,
             recent_protect_budget=args.recent_protect_budget,
+            n_latest=args.n_latest,
         ).to(args.device)
 
     # Prepare dataset
