@@ -7,10 +7,16 @@ from torch import nn
 
 class KVHashCache(Cache):
     def __init__(
-        self, config, cache_budget, sink_protect_tokens, recent_protect_budget
+        self,
+        config,
+        cache_budget,
+        sink_protect_tokens,
+        recent_protect_budget,
+        n_latest,
     ) -> None:
         super().__init__()
         self.config = config
+        self.n_latest = n_latest
         self.cache_budget = cache_budget
         self.sink_protect_tokens = sink_protect_tokens
         self.recent_protect_budget = recent_protect_budget
@@ -170,7 +176,9 @@ class KVHashCache(Cache):
         for i in range(self.config.num_attention_heads):
             one_q = query_states[0, i]
             one_k = key_states[0, i]
-            indices = self.pca_select(one_q, one_k, 4, 64, 32)
+            indices = self.pca_select(
+                one_q, one_k, 4, 64, self.n_latest
+            )  # PCA = 16, Latest = 48
             query_proxy = one_q[indices, :]
             attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(
                 self.config.head_dim
@@ -192,7 +200,9 @@ class KVHashCache(Cache):
         for i in range(self.config.num_attention_heads):
             one_q = query_states[0, i]
             one_k = key_states[0, i]
-            indices = self.pca_select(one_q, one_q, 4, 64, 32)
+            indices = self.pca_select(
+                one_q, one_q, 4, 64, self.n_latest
+            )  # PCA = 16, Latest = 48
             query_proxy = one_q[indices, :]
             attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(
                 self.config.head_dim

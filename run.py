@@ -56,6 +56,7 @@ def main():
             sink_protect_tokens = args.sink_protect_tokens,
             recent_protect_budget = args.recent_protect_budget,
             num_planes=args.num_planes
+            n_latest = args.n_latest,
         ).to(args.device)
 
     input_text = "Compare the Llama model and GPT model"
