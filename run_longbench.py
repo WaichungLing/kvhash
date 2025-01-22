@@ -59,7 +59,7 @@ def post_process(response, model_name):
     return response
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
-    file_name = f'pred/sparsity_pca_32/{dataset}_sparsity.jsonl'
+    file_name = f'pred/sparsity_h2o/{dataset}_sparsity.jsonl'
     idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
@@ -112,10 +112,10 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
 
             # ======= unicache expr ========
             with open(file_name, "a", encoding="utf-8") as f:
-                json.dump({'gt': past_key_value.attn_sparsity, 
+                json.dump({'h2o': past_key_value.attn_sparsity 
                            # 'tail': past_key_value.attn_sparstiy_hash
-                           'pca_qk': past_key_value.attn_sparsity_pca_qk,
-                           'pca_qq': past_key_value.attn_sparsity_pca_qq
+                        #    'pca_qk': past_key_value.attn_sparsity_pca_qk,
+                        #    'pca_qq': past_key_value.attn_sparsity_pca_qq
                         }, f, ensure_ascii=False)
                 f.write('\n')
             # ==============================
