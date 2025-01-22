@@ -8,6 +8,7 @@
 #SBATCH --gres=gpu:h100-47:1
 
 . .venv/bin/activate
-# srun python run_longbench.py --n_latest=48 >kv48.out 2>kv48.err
-srun python run_longbench.py --n_latest=8 >kv48.out 2>kv48.err
-# srun python run_longbench.py --n_latest=32 >kv32.out 2>kv32.err
+# srun python run_longbench.py --n_latest=24 >kv48.out 2>kv48.err
+# srun python run_longbench.py --n_latest=40 >kv40.out 2>kv40.err
+# srun python run_longbench.py --n_latest=56 >kv56.out 2>kv56.err
+# 8, 16, 24, 32, 40, 48, 56, 64

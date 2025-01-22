@@ -96,8 +96,8 @@ def get_pred(
     out_path,
 ):
     n_pca = 64 - n_latest
-    file_name = f"pred/sparsity_L{n_latest}_P{n_pca}/{dataset}_sparsity.jsonl"
-    path_name = f"pred/sparsity_L{n_latest}_P{n_pca}/"
+    file_name = f"pred/sparsity_{n_latest}/{dataset}_sparsity.jsonl"
+    path_name = f"pred/sparsity_{n_latest}/"
     os.makedirs(path_name, exist_ok=True)
     idx = 0
     for json_obj in tqdm(data):
