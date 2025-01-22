@@ -10,13 +10,12 @@ def parse_args():
     parser.add_argument("--data_dir", type=str, default="data", help="Cache directory for dataset etc")
     parser.add_argument("--pred_dir", type=str, default="pred", help="Result directory that holds experiment output")
     # unicache
-    parser.add_argument("--cache_level", type=str, default="request", help="option: request, layer, head")
-    parser.add_argument("--cache_budget", type=float, default=0.6, help="global kv cache budget")
-    parser.add_argument("--sink_protect_tokens", type=int, default=128, help="number of tokens to be protect at the head")  # put back 256
-    parser.add_argument("--recent_protect_budget", type=int, default=0.05, help="ration of tokens to be protect at the end")  # put back 0.01
-    parser.add_argument("--min_eviction_seqlen", type=int, default=100, help="sequence length that starts eviction")  # put back 2048
-    parser.add_argument("--top_k", type=float, default=0.01, help="top k query states for proxy")   
+    parser.add_argument("--cache_budget", type=float, default=0.2, help="global kv cache budget")
+    parser.add_argument("--recent_protect_budget", type=int, default=128, help="number of tokens to be protect at the end")  
+    parser.add_argument("--proxy_total", type=int, default=64, help="number of query proxy tokens")
+    parser.add_argument("--proxy_latest", type=int, default=16, help="number of latest window of proxy")
     parser.add_argument("--top_rank", type=int, default=20, help="top rank for PCA reduction")
+    parser.add_argument("--n_recursive", type=int, default=1, help="number of recursion for elbow point allocation")
     # tasks:
     parser.add_argument("--task", type=str, default="narrativeqa", help="evaluation task")
     return parser.parse_args()

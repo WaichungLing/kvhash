@@ -1,6 +1,6 @@
 import torch
 import math
-import numpy as np
+from torch import nn
 from typing import Any, Dict, List, Optional, Tuple
 from transformers.cache_utils import Cache
 from transformers.models.llama.modeling_llama import repeat_kv
@@ -11,33 +11,34 @@ class KVHashCache(Cache):
         self,
         config,
         cache_budget,
-        sink_protect_tokens,
         recent_protect_budget,
         device: str | None,
-        top_k: float = 0.01,
-        num_planes: int = 4,
-        top_rank: int = 16
+        proxy_total: int = 64,
+        proxy_latest: int = 16, 
+        top_rank: int = 4,
+        n_recursive: int = 1
     ) -> None:
         super().__init__()
         self.config = config
+
         self.cache_budget = cache_budget
-        self.sink_protect_tokens = sink_protect_tokens
         self.recent_protect_budget = recent_protect_budget
+        self.proxy_total = proxy_total
+        self.proxy_latest = proxy_latest
+        self.top_rank = top_rank
+        self.n_recursive = n_recursive
+
         self._seen_tokens = 0
-        self.num_planes = num_planes
 
-        self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen, hidden)] * layer
-        self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen, hidden)] * layer
-
-        self.query_proxy: List[torch.Tensor] = [None] * self.config.num_hidden_layers  # [(batch, num_head, qlen)] * layer
+        self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers     # [(batch, num_key_value_head, qlen, hidden)] * layer
+        self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # [(batch, num_key_value_head, qlen, hidden)] * layer
+        self.query_proxy: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # [(batch, num_attention_head, proxy_total, hidden)] * layer
 
         if device is not None:
             self.device = device
         else:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        self.top_k = top_k
-        self.top_rank = top_rank
 
     def __getitem__(self, layer_idx: int) -> List[Tuple[torch.Tensor]]:
         """
@@ -64,39 +65,23 @@ class KVHashCache(Cache):
         """
         return len(self.key_cache)
 
-    def pca_select(self, data: torch.Tensor, r:int,  k: int, write: bool):
-        """pca_select: select seq_len from (seq_len, hidden) data using PCA.
-
-        Args:
-            data: torch.Tensor: (seq_len, hidden)
-            r: rank to be kept
-            k: number of top PCs to select
-
-        Returns:
-            indices: torch.Tensor: (k,)
-        """
-        assert data.dim() == 2, "Input tensor must have 2 dimensions (seqlen, hidden)."
-        s, h = data.shape
-        data_center = data - data.mean(dim=0)
-        if data_center.dtype != torch.float32:
-            data_center = data_center.to(torch.float32)
-        U, S, Vh = torch.linalg.svd(data_center, full_matrices=False)  # Vh: (h, h)
+    def pca_select(self, query: torch.Tensor, key: torch.Tensor, r:int,  total: int, latest: int):     # select proxy from query
+        s, h = query.shape    
+        pca_center = key - key.mean(dim=0)
+        if pca_center.dtype != torch.float32:
+            pca_center = pca_center.to(torch.float32)
+        U, S, Vh = torch.linalg.svd(pca_center, full_matrices=False)  # Vh: (h, h)
         w = min(r, h)
-        top_PCs = Vh[:w, :]  # Shape: (w, h)
-        # Projection: (s, k)
-        projection = torch.matmul(data_center, top_PCs.T)
-        importance_scores = projection.pow(2).sum(dim=1)
-        _, top_k_indices = torch.topk(importance_scores, k=k, largest=True, sorted=True)  # Shape: (k,)
-        return top_k_indices
+        top_PCs = (S[:w, None] * Vh[:w, :])  # (r, h)
+        projection = torch.matmul(query, top_PCs.T)  # (s, r)
+        importance_scores = projection.pow(2).sum(dim=1)  # (s,)
+        _, top_k_importance_indices = torch.topk(importance_scores, k=total, largest=True)
+        last_16_indices = torch.arange(s - latest, s, device=key.device)
+        top_k_importance_indices = top_k_importance_indices[~torch.isin(top_k_importance_indices, last_16_indices)]
+        remaining_top_indices = top_k_importance_indices[:total - latest]
+        combined_indices = torch.cat([remaining_top_indices, last_16_indices])
+        return combined_indices
 
-    def select_q_pca2(self, data: torch.Tensor, r: int, k: int, write: bool):
-        b, n, s, h = data.shape
-        # Every b, n would choose a different set of indices tokens
-        indices = torch.zeros((b, n, k), device=data.device, dtype=torch.long)
-        for i in range(b):
-            for j in range(n):
-                indices[i, j] = self.pca_select(data[i, j], r, k, write)
-        return indices
 
     def update(
         self,
@@ -106,78 +91,82 @@ class KVHashCache(Cache):
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        assert cache_kwargs is not None, "cache_kwargs must be provided for KVHashCache"
         if layer_idx == 0:
             self._seen_tokens += key_states.shape[-2]
 
-        if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:
+        if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:    # prefill only
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
-        else:
-            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
-            self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
 
-        assert self.key_cache[layer_idx].shape[2] == self.value_cache[layer_idx].shape[2], "Mismatch in the sequence length of K and V Cache"
+            l_query_proxy = []
+            for i in range(self.config.num_attention_heads):
+                one_q = query_states[0,i]
+                one_k = key_states[0,int(i//self.config.num_key_value_heads)]
+                indices = self.pca_select(one_q, one_k ,self.top_rank, self.proxy_total, self.proxy_latest)
+                one_proxy = one_q[indices,:]      # (proxy_total, num_hidden)
+                l_query_proxy.append[one_proxy]
+                # attn = torch.matmul(query_proxy, one_k.transpose(0, 1)) / math.sqrt(self.config.head_dim)
+                # attn = nn.functional.softmax(attn, dim=-1, dtype=torch.float32).to(query_states.dtype)
+                # attn_sum = torch.sum(attn, dim=0)
+                # min_val = torch.min(attn_sum)
+                # max_val = torch.max(attn_sum)
+                # threshold = min_val + 0.001 * (max_val - min_val)
+                # sparsity = torch.sum(attn_sum < threshold).item() / query_states.shape[2]
+                # l_sparsity.append(sparsity)
+            self.query_proxy[layer_idx] = torch.stack(l_query_proxy, dim=0).unsqueeze(0)
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
-    def evict(self, layer_idx: int, query_states: torch.Tensor):
-        if query_states.shape[-2] == 1:  # skip autoregressive
-            return
+    def evict(self):
+        """
+            self.key_cache      # [(batch, num_key_value_head, qlen, hidden)] * layer
+            self.value_cache    # [(batch, num_key_value_head, qlen, hidden)] * layer
+            self.query_proxy    # [(batch, num_attention_head, proxy_total, hidden)] * layer
+        """
+        key_cache = torch.stack(self.key_cache)         # Shape: (num_layers, batch, num_key_value_head, qlen, hidden)
+        value_cache = torch.stack(self.value_cache)     # Shape: (num_layers, batch, num_key_value_head, qlen, hidden)
+        query_proxy = torch.stack(self.query_proxy)     # Shape: (num_layers, batch, num_attention_head, proxy_total, hidden)
+        l, b, gqah, qlen, hidden = key_cache.shape
 
-        self.update_hash_values(layer_idx, self.key_cache[layer_idx], query_states.shape[-2])
+        repeat_factor = self.config.num_attention_head // self.config.num_key_value_head
+        key_cache_repeated = key_cache.repeat_interleave(repeat_factor, dim=2)  # Shape: (num_layers, batch, num_attention_head, qlen, hidden)
 
-        # compute budgets
-        q_len = self.key_cache[layer_idx].shape[2]
-        recent_protect_tokens = int(self.recent_protect_budget * q_len)
-        if recent_protect_tokens == 0:
-            recent_protect_tokens = 1
-        eviction_zone = q_len - recent_protect_tokens - self.sink_protect_tokens
-        evict_tokens = q_len - int(self.cache_budget * self._seen_tokens)
-        if evict_tokens > eviction_zone:
-            return
-        if evict_tokens == 0:
-            return
-        assert evict_tokens > 0, "the number of tokens need to be evicted should be larger than 0"
+        # Compute attention scores
+        attn_scores = torch.einsum(
+            'lbqph,lbqkh->lbqpk',
+            query_proxy,
+            key_cache_repeated.transpose(-1, -2)
+        ) / math.sqrt(self.config.head_dim)             # Shape: (num_layers, batch, num_attention_head, proxy_total, qlen)
+        attn_probs = torch.softmax(attn_scores, dim=-1) # Shape: (num_layers, batch, num_attention_head, proxy_total, qlen)
+        print(f"DEBUG, proxy attn {attn_probs.shape}")
+        summation = torch.sum(attn_probs, dim=-2)       # Shape: (num_layers, batch, num_attention_head, qlen)
+        print(f"DEBUG, summation {summation.shape}")
+        maximum = torch.max(summation, dim=-1)          # Shape: (num_layers, batch, num_attention_head)
+        minimum = torch.min(summation, dim=-1)          # Shape: (num_layers, batch, num_attention_head)
+        print(f"DEBUG, min/max {maximum.shape}")
+        threshold = minimum + 0.0005 * (maximum - minimum)
+        sparsity = torch.sum(summation < threshold.unsqueeze(-1), dim=-1) / summation.shape[-1] # Shape: (num_layers, batch, num_attention_head)
+        print(f"DEBUG, sparsity {sparsity.shape}")
+        
+        # GQA processing
+        # Shape: (num_layers, batch, num_key_value_head)
+        grouped_sparsities = sparsity.view(sparsity.shape[0], sparsity.shape[1], sparsity.shape[2], repeat_factor).mean(dim=-1)
+        print(f"DEBUG, g_sparsity {grouped_sparsities.shape}")
+        flattened_sparsities = torch.cat(grouped_sparsities, dim=1).squeeze(0)
+        sorted_sparsities, sorted_indices = torch.sort(flattened_sparsities)
 
-        # print(f"self.device: {self.device}")
-        # print(f"query_states shape: {query_states.shape}, on {query_states.device}")
+        # Per-head separation group
+        separation = self.find_elbow_and_separate_recursive(sorted_sparsities, sorted_indices, self.n_recursive)
+        print("DEBUG",separation)
 
-        # proxy token selection
-        # proxy_indices = self.proxy_token_selection(query_states)  # (b, num_head, tail+k, hidden_d)
-        # print(f"DEBUG: PXY: {proxy_indices.shape}")
-        # proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)  # (b, num_head, tail+k, hidden_d)
-
-        # NOTE: PCA implementation
-        top_k = int(self.top_k * q_len)  # Choose topk = ratio * q_len
-        top_k = max(top_k, min(q_len, 10))
-        proxy_indices = self.select_q_pca2(query_states, self.top_rank, top_k, False)  # (b, num_head, k)
-
-        # ============= Observation ================ #
-        _ = self.select_q_pca2(self.key_cache[layer_idx], self.top_rank, top_k, True)
-        # ============= Observation =============== #
-
-        # print(f"DEBUG: PCA: {proxy_indices.shape}")
-        # proxy_indices = proxy_indices.unsqueeze(-1).repeat(1, 1, 1, query_states.shape[-1])# (b, num_head, k, hidden_d)
-        proxy_indices = proxy_indices.unsqueeze(-1).expand(-1, -1, -1, query_states.shape[-1])  # (b, num_head, k, hidden_d)
-        proxy_query_states = torch.gather(query_states, dim=2, index=proxy_indices)  # (b, num_head, tail+k, hidden_d)
-        # proxy_query_states = query_states[:, :, proxy_indices, :]
-
-        if layer_idx == 0:
-            print(
-                f"q_len = {q_len}, recent_protect = {recent_protect_tokens}, eviction_zone = {eviction_zone}, evict_tokens = {evict_tokens}, q.shape={query_states.shape} -> {proxy_query_states.shape}"
-            )
-
-        # calculate proxy attention scores
-        key_to_mul = repeat_kv(self.key_cache[layer_idx], self.config.num_attention_heads // self.config.num_key_value_heads)
-        attn_weights = torch.matmul(proxy_query_states, key_to_mul.transpose(2, 3)) / math.sqrt(self.config.head_dim)
-        summation = torch.sum(attn_weights, dim=2)
-        n_per_group = self.config.num_attention_heads // self.config.num_key_value_heads
-        if n_per_group > 1:
-            temp = summation.view(summation.shape[0], self.config.num_key_value_heads, n_per_group, -1)
-            summation = temp.sum(dim=2)  # summation shape = (b, 8, qlen)
-
-        evict_hash = self.hash_values[layer_idx][:, :, self.sink_protect_tokens : -recent_protect_tokens]  # Shape (b, num_heads, qlen)
-        evict_attn = summation[:, :, self.sink_protect_tokens : -recent_protect_tokens]  # Shape (b, num_heads, qlen)
+        # Budget allocation for each group
+        budget_to_token = self.cache_budget * self._seen_tokens * self.config.num_key_value_heads * self.config.num_hidden_layers   # for key_states only
+        separation_gap = torch.zeros(len(separation))
+        for i in range(len(separation)):
+            gap = sorted_sparsities[separation[i][-1]] - sorted_sparsities[separation[i][0]]
+            separation_gap[i] = gap
+        allocation_weights = torch.softmax(separation_gap, dim=0)
+        budget_allocation = allocation_weights * budget_to_token
+        
         evict_ids = []  # Pure two d array, [[head1], [head2], ...]
         for i in range(self.config.num_key_value_heads):
             # head_eviction: random plane
@@ -222,46 +211,64 @@ class KVHashCache(Cache):
 
         assert self.key_cache[layer_idx].shape[2] == valid_indices.shape[1], "Mismatch in q_len after eviction!"
 
-    def head_eviction(self, hash, attn, head_idx, evict_num):
-        unique_values, inverse_indices, counts = torch.unique(hash[:, head_idx, :], return_inverse=True, return_counts=True)
-        frequencies = counts.float() / counts.sum()  # Frequency of each unique hash value
-        evict_num_per_hash = (frequencies * evict_num).floor().long()  # Dynamic K values (one per unique hash)
+    def head_eviction(self, layer_idx, head_idx, evict_num):
+        
 
-        num_unique = unique_values.size(0)
-        inverse_indices_expanded = inverse_indices.view(1, -1)  # Expand for broadcasting
-        mask = inverse_indices_expanded == torch.arange(num_unique, device=hash.device).view(-1, 1)
+    def find_elbow_and_separate_recursive(self, sorted_sparsities, sorted_indices, n_recursive, depth=0):
+        """
+        Recursively partitions sparsities into 2^n_recursive segments by finding elbow points.
 
-        attn_sums_per_unique = torch.where(mask, attn[:, head_idx, :].expand(num_unique, -1), torch.tensor(float("inf"), device=hash.device))
+        Parameters:
+        sorted_sparsities (torch.Tensor): Flattened and sorted sparsity values.
+        sorted_indices (torch.Tensor): Indices corresponding to the sorted sparsity values.
+        n_recursive (int): Number of recursive splits (resulting in 2^n_recursive segments).
+        depth (int): Current depth of recursion.
 
-        evict_id_per_head = torch.empty(evict_num_per_hash.sum().item(), dtype=torch.long, device=hash.device)
-        start_idx = 0
-        for i in range(num_unique):
-            k = evict_num_per_hash[i]  # Dynamic K for this unique value
-            if k > 0:
-                # Use `largest=False` to select smallest K values
-                _, topk_indices = torch.topk(attn_sums_per_unique[i], k=k, largest=False)
-                evict_id_per_head[start_idx : start_idx + k] = topk_indices
-                start_idx += k
+        Returns:
+        list of list of int: Partitioned indices after recursive splitting.
+        """
+        if depth == self.n_recursive:
+            return [sorted_indices.tolist()]
 
-        return evict_id_per_head
+        # Find the elbow point
+        n = sorted_sparsities.size(0)
+        x = torch.arange(n, dtype=torch.float32)
+        start = torch.stack((x[0], sorted_sparsities[0]))
+        end = torch.stack((x[-1], sorted_sparsities[-1]))
+        line_vec = end - start
+        line_vec_norm = line_vec / torch.norm(line_vec)
 
-    def head_eviction_topk(self, attn, head_idx, evict_num):
-        # return eviction id purely based on attention sum, no hash involves
-        _, indices = torch.topk(attn[:, head_idx, :], evict_num, largest=False)
-        return indices
+        # Vectorize
+        points = torch.stack((x, sorted_sparsities), dim=1)
+        vec_to_points = points - start
+        proj_lengths = torch.matmul(vec_to_points, line_vec_norm)
+        proj_points = start + proj_lengths.unsqueeze(1) * line_vec_norm
+        distances = torch.norm(points - proj_points, dim=1)
+        elbow_index = torch.argmax(distances).item()
 
-    def is_eviction_needed(self, layer_idx):
-        # if layer_idx == 0:
-        #     print(f"===== {self.key_cache[layer_idx].shape[2]} -- {int(self._seen_tokens * self.cache_budget)}/{self._seen_tokens}=====")
-        return self.key_cache[layer_idx].shape[2] > self._seen_tokens * self.cache_budget
+        first_indices = sorted_indices[:elbow_index + 1]
+        second_indices = sorted_indices[elbow_index + 1:]
+
+        # Recursion
+        first_partition = self.find_elbow_and_separate_recursive(
+            sorted_sparsities[:elbow_index + 1],
+            first_indices,
+            n_recursive,
+            depth + 1
+        )
+        second_partition = self.find_elbow_and_separate_recursive(
+            sorted_sparsities[elbow_index + 1:],
+            second_indices,
+            n_recursive,
+            depth + 1
+        )
+        return first_partition + second_partition
 
     def clear(self):
         self._seen_tokens = 0
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.div_planes = torch.randn((self.num_planes, self.config.head_dim), dtype=torch.bfloat16, device=self.div_planes.device)
+        self.query_proxy: List[torch.Tensor] = [None] * self.config.num_hidden_layers
     
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
