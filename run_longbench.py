@@ -136,8 +136,7 @@ def main():
     seed_everything(42)
 
     args = parse_args()
-    if args.cache_budget == 1.0:
-        args.enable_kvhash = False
+    print(args)
 
     if not os.path.exists(args.pred_dir):
         os.makedirs(args.pred_dir)
@@ -153,32 +152,32 @@ def main():
 
     print("Loading config...")
     config = AutoConfig.from_pretrained(args.model_name, cache_dir=args.cache_dir, token=tokens.HF_TOKEN)
-    if args.enable_kvhash:
-        config.enable_kvhash = args.enable_kvhash
-        config.min_eviction_seqlen = args.min_eviction_seqlen
+    if args.enable_eviction:
+        config.enable_eviction = args.enable_eviction
     config.pad_token_id = config.eos_token_id[0]
     print(config)
 
     print("Loading model...")
     model = AutoModelForCausalLM.from_pretrained(args.model_name, config=config, cache_dir=args.cache_dir, attn_implementation="flash_attention_2", token=tokens.HF_TOKEN)
 
-    if args.enable_kvhash:
+    if args.enable_eviction:
         convert_llama_with_kv_hash(model)
-        print("[KVHash] -- replacing llama attention wit KVHash")
+        print("[ EVICTION ENABLED ]")
     model.to(dtype=torch.bfloat16).to(args.device).eval()
 
     print("Loading everything done")
 
     past_key_value = None
-    if args.enable_kvhash:
+    if args.enable_eviction:
         past_key_value = KVHashCache(
             config,
             cache_budget=args.cache_budget,
-            sink_protect_tokens=args.sink_protect_tokens,
             recent_protect_budget=args.recent_protect_budget,
             device=args.device,
-            top_k=args.top_k,
-            top_rank=args.top_rank
+            proxy_total=args.proxy_total,
+            proxy_latest=args.proxy_latest,
+            top_rank=args.top_rank,
+            n_recursion=args.n_recursion
         ).to(args.device)
 
     # Prepare dataset

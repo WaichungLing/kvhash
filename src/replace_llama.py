@@ -21,7 +21,8 @@ def my_forward(
     output_attentions: bool = False,
     use_cache: bool = False,
     cache_position: Optional[torch.LongTensor] = None,
-    position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+    # will become mandatory in v4.46
+    position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     if isinstance(past_key_value, StaticCache):
         raise ValueError(
@@ -40,9 +41,12 @@ def my_forward(
     # Flash attention requires the input to have the shape
     # batch_size x seq_length x head_dim x hidden_dim
     # therefore we just need to keep the original shape
-    query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-    key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-    value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+    query_states = query_states.view(
+        bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key_states = key_states.view(
+        bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+    value_states = value_states.view(
+        bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
     if position_embeddings is None:
         # logger.warning_once(
@@ -54,12 +58,15 @@ def my_forward(
         cos, sin = self.rotary_emb(value_states, position_ids)
     else:
         cos, sin = position_embeddings
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+    query_states, key_states = apply_rotary_pos_emb(
+        query_states, key_states, cos, sin)
 
     if past_key_value is not None:
         # sin and cos are specific to RoPE models; cache_position needed for the static cache
-        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-        key_states, value_states = past_key_value.update(key_states, value_states, query_states, self.layer_idx, cache_kwargs)
+        cache_kwargs = {"sin": sin, "cos": cos,
+                        "cache_position": cache_position}
+        key_states, value_states = past_key_value.update(
+            key_states, value_states, query_states, self.layer_idx, cache_kwargs)
 
     # TODO: These transpose are quite inefficient but Flash Attention requires the layout
     # [batch_size, sequence_length, num_heads, head_dim].
@@ -113,7 +120,8 @@ def my_forward(
     attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
     attn_output = self.o_proj(attn_output)
 
-    if past_key_value is not None and query_states.shape[1] > 1:    # only in autoregressive
+    # only after prefill
+    if past_key_value is not None and query_states.shape[1] > 1 and self.layer_idx == self.config.num_hidden_layers - 1 and self.config.enable_eviction:
         past_key_value.evict()
 
     if not output_attentions:
