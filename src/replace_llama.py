@@ -1,4 +1,5 @@
 import torch
+import math
 
 from typing import Optional, Tuple
 from transformers.modeling_flash_attention_utils import _flash_attention_forward
@@ -34,6 +35,8 @@ def my_forward(
 
     bsz, q_len, _ = hidden_states.size()
 
+    is_prefill = q_len > 1
+
     query_states = self.q_proj(hidden_states)
     key_states = self.k_proj(hidden_states)
     value_states = self.v_proj(hidden_states)
@@ -68,60 +71,94 @@ def my_forward(
         key_states, value_states = past_key_value.update(
             key_states, value_states, query_states, self.layer_idx, cache_kwargs)
 
-    # TODO: These transpose are quite inefficient but Flash Attention requires the layout
-    # [batch_size, sequence_length, num_heads, head_dim].
-    # We would need to refactor the KV cache
-    # to be able to avoid many of these transpose/reshape/view.
-    query_states = query_states.transpose(1, 2)
-    key_states = key_states.transpose(1, 2)
-    value_states = value_states.transpose(1, 2)
+    # ============= PREFILL ================ #
+    if is_prefill:
+        # TODO: These transpose are quite inefficient but Flash Attention requires the layout
+        # [batch_size, sequence_length, num_heads, head_dim].
+        # We would need to refactor the KV cache
+        # to be able to avoid many of these transpose/reshape/view.
+        query_states = query_states.transpose(1, 2)
+        key_states = key_states.transpose(1, 2)
+        value_states = value_states.transpose(1, 2)
 
-    dropout_rate = self.attention_dropout if self.training else 0.0
+        dropout_rate = self.attention_dropout if self.training else 0.0
 
-    # In PEFT, usually we cast the layer norms in float32 for training stability reasons
-    # therefore the input hidden states gets silently casted in float32. Hence, we need
-    # cast them back in the correct dtype just to be sure everything works as expected.
-    # This might slowdown training & inference so it is recommended to not cast the LayerNorms
-    # in fp32. (LlamaRMSNorm handles it correctly)
+        # In PEFT, usually we cast the layer norms in float32 for training stability reasons
+        # therefore the input hidden states gets silently casted in float32. Hence, we need
+        # cast them back in the correct dtype just to be sure everything works as expected.
+        # This might slowdown training & inference so it is recommended to not cast the LayerNorms
+        # in fp32. (LlamaRMSNorm handles it correctly)
 
-    input_dtype = query_states.dtype
-    if input_dtype == torch.float32:
-        if torch.is_autocast_enabled():
-            target_dtype = torch.get_autocast_gpu_dtype()
-        # Handle the case where the model is quantized
-        elif hasattr(self.config, "_pre_quantization_dtype"):
-            target_dtype = self.config._pre_quantization_dtype
-        else:
-            target_dtype = self.q_proj.weight.dtype
+        input_dtype = query_states.dtype
+        if input_dtype == torch.float32:
+            if torch.is_autocast_enabled():
+                target_dtype = torch.get_autocast_gpu_dtype()
+            # Handle the case where the model is quantized
+            elif hasattr(self.config, "_pre_quantization_dtype"):
+                target_dtype = self.config._pre_quantization_dtype
+            else:
+                target_dtype = self.q_proj.weight.dtype
 
-        # logger.warning_once(
-        #     f"The input hidden states seems to be silently casted in float32, this might be related to"
-        #     f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
-        #     f" {target_dtype}."
-        # )
+            # logger.warning_once(
+            #     f"The input hidden states seems to be silently casted in float32, this might be related to"
+            #     f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
+            #     f" {target_dtype}."
+            # )
 
-        query_states = query_states.to(target_dtype)
-        key_states = key_states.to(target_dtype)
-        value_states = value_states.to(target_dtype)
+            query_states = query_states.to(target_dtype)
+            key_states = key_states.to(target_dtype)
+            value_states = value_states.to(target_dtype)
 
-    attn_output = _flash_attention_forward(
-        query_states,
-        key_states,
-        value_states,
-        attention_mask,
-        q_len,
-        position_ids=position_ids,
-        dropout=dropout_rate,
-        sliding_window=getattr(self, "sliding_window", None),
-        use_top_left_mask=self._flash_attn_uses_top_left_mask,
-        is_causal=self.is_causal,
-    )
+        attn_output = _flash_attention_forward(
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            q_len,
+            position_ids=position_ids,
+            dropout=dropout_rate,
+            sliding_window=getattr(self, "sliding_window", None),
+            use_top_left_mask=self._flash_attn_uses_top_left_mask,
+            is_causal=self.is_causal,
+        )
+        attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
+    else:
+        # ============== DECODE ================ #
+        Q_4d = query_states.transpose(1,2)      # (bsz, query_length, num_attn_heads, hidden)
+        batch_size, q_len, n_qheads, d_qhead = Q_4d.shape
+        assert batch_size == 1 and q_len == 1, "This code expects batch=1, single token decode."
+        
+        repeat_factor = self.config.num_attention_heads // self.config.num_key_value_heads
+        head_outputs = []
+        for i in range(n_qheads):  # 0..23
+            q_i = Q_4d[0, 0, i, :]  # shape (128,)
+            
+            kv_idx = i // repeat_factor  # e.g. i//3
 
-    attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
+            K_i = key_states[kv_idx]  # shape (seqLen_i, 128)
+            V_i = value_states[kv_idx]  # shape (seqLen_i, 128)
+            q_i_2d = q_i.unsqueeze(0)  # (1, 128)
+            K_i_t = K_i.transpose(0,1) # (128, seqLen_i)
+            attn_scores = torch.matmul(q_i_2d, K_i_t).squeeze(0)  # => shape (seqLen_i,)
+
+            scale = 1.0 / math.sqrt(self.head_dim)
+            attn_scores = attn_scores * scale
+            attn_probs = torch.softmax(attn_scores, dim=-1)
+
+            attn_probs_2d = attn_probs.unsqueeze(0)  # (1, seqLen_i)
+            out_i_2d = torch.matmul(attn_probs_2d, V_i)   # => (1,128)
+            out_i = out_i_2d.squeeze(0)               # => (128,)
+            head_outputs.append(out_i)
+
+        all_heads = torch.stack(head_outputs, dim=0)  # => (24,128)
+        attn_output = all_heads.view(1, 1, n_qheads * d_qhead)
+
+    print(f"INSIGHTS: attn_output {attn_output.shape}")
     attn_output = self.o_proj(attn_output)
+    print(f'INSIGHTS: final output {attn_output.shape}')
 
     # only after prefill
-    if past_key_value is not None and query_states.shape[1] > 1 and self.layer_idx == self.config.num_hidden_layers - 1 and self.config.enable_eviction:
+    if past_key_value is not None and self.layer_idx == self.config.num_hidden_layers - 1 and self.config.enable_eviction and is_prefill:
         past_key_value.evict()
 
     if not output_attentions:
