@@ -14,14 +14,14 @@ from config import tokens
 from datasets import load_dataset
 
 LONGBENCH_TASKS = [
-    "narrativeqa",
-    "qasper",
-    "multifieldqa_en",
-    "multifieldqa_zh",
-    "hotpotqa",
-    "2wikimqa",
-    "musique",
-    "dureader",
+    # "narrativeqa",
+    # "qasper",
+    # "multifieldqa_en",
+    # "multifieldqa_zh",
+    # "hotpotqa",
+    # "2wikimqa",
+    # "musique",
+    # "dureader",
     "gov_report",
     "qmsum",
     "multi_news",

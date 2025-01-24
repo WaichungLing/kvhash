@@ -260,6 +260,9 @@ class KVHashCache(Cache):
         #        "DEBUG [head_eviction] Force retaining the latest window, return")
             return torch.arange(
             scorer.size(0) - self.recent_protect_budget, scorer.size(0), device=scorer.device)
+        
+        if budget - self.recent_protect_budget > scorer[:-self.recent_protect_budget].numel():
+            return torch.arange(0, scorer.size(0), device=scorer.device)
 
         # Identify indices to keep using top-k and protect the recent window
         _, keep_idx = torch.topk(
