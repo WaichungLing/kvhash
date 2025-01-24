@@ -153,9 +153,9 @@ def my_forward(
         all_heads = torch.stack(head_outputs, dim=0)  # => (24,128)
         attn_output = all_heads.view(1, 1, n_qheads * d_qhead)
 
-    print(f"INSIGHTS: attn_output {attn_output.shape}")
+    # print(f"INSIGHTS: attn_output {attn_output.shape}")
     attn_output = self.o_proj(attn_output)
-    print(f'INSIGHTS: final output {attn_output.shape}')
+    # print(f'INSIGHTS: final output {attn_output.shape}')
 
     # only after prefill
     if past_key_value is not None and self.layer_idx == self.config.num_hidden_layers - 1 and self.config.enable_eviction and is_prefill:

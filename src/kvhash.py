@@ -129,19 +129,19 @@ class KVHashCache(Cache):
                 self.key_cache: [[(keep_i, hidden) * num_key_value_heads]]*layer
                 self.value_cache: [[(keep_i, hidden) * num_key_value_heads]]*layer
             """
-            print(f"DEBUG: DECODING")
+            # print(f"DEBUG: DECODING")
             for h_id in range(self.config.num_key_value_heads):
                 old_k = self.key_cache[layer_idx][h_id]   # shape (keep_i, hidden)
                 old_v = self.value_cache[layer_idx][h_id] # shape (keep_i, hidden)
                 new_k = key_states[0, h_id] # shape (1, hidden)
                 new_v = value_states[0, h_id]
 
-                print(f"DEBUG [DECODING]: l = {layer_idx}, h = {h_id}, pre key {old_k.shape}")
+                # print(f"DEBUG [DECODING]: l = {layer_idx}, h = {h_id}, pre key {old_k.shape}")
                 updated_k = torch.cat([old_k, new_k], dim=0)
                 updated_v = torch.cat([old_v, new_v], dim=0)
                 self.key_cache[layer_idx][h_id]   = updated_k
                 self.value_cache[layer_idx][h_id] = updated_v
-                print(f"DEBUG [DECODING]: l = {layer_idx}, h = {h_id}, after key {self.key_cache[layer_idx][h_id].shape}")
+                # print(f"DEBUG [DECODING]: l = {layer_idx}, h = {h_id}, after key {self.key_cache[layer_idx][h_id].shape}")
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
     def evict(self):
@@ -156,8 +156,8 @@ class KVHashCache(Cache):
         value_cache = torch.stack(self.value_cache)
         # Shape: (num_layers, batch, num_attention_head, proxy_total, hidden)
         query_proxy = torch.stack(self.query_proxy)
-        print(
-            f"DEBUG, key {key_cache.shape}, value {value_cache.shape}, query_proxy {query_proxy.shape}")
+        # print(
+        #    f"DEBUG, key {key_cache.shape}, value {value_cache.shape}, query_proxy {query_proxy.shape}")
         l, b, gqah, qlen, hidden = key_cache.shape
 
         repeat_factor = self.config.num_attention_heads // self.config.num_key_value_heads
@@ -247,17 +247,17 @@ class KVHashCache(Cache):
         del old_key_cache
         del old_value_cache
 
-        print("---- EVICTION DONE ----")
+        # print("---- EVICTION DONE ----")
 
     def head_eviction(self, scorer, l_id, h_id, budget):
         """
             budget is the number of token to keep
         """
-        print(
-            f"DEBUG [head_eviction], scorer {scorer.shape}, l={l_id}, h={h_id}, b={budget}")
+        # print(
+        #    f"DEBUG [head_eviction], scorer {scorer.shape}, l={l_id}, h={h_id}, b={budget}")
         if budget < self.recent_protect_budget:
-            print(
-                "DEBUG [head_eviction] Force retaining the latest window, return")
+        #    print(
+        #        "DEBUG [head_eviction] Force retaining the latest window, return")
             return torch.arange(
             scorer.size(0) - self.recent_protect_budget, scorer.size(0), device=scorer.device)
 

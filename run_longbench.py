@@ -126,7 +126,6 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
             past_key_value.clear()
         
         print(pred)
-        1/0
 
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
@@ -192,7 +191,7 @@ def main():
     dataset2prompt = json.load(open("longbench/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("longbench/dataset2maxlen.json", "r"))
 
-    base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}"
+    base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
     for dataset in datasets:
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]

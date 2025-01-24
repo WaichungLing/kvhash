@@ -42,9 +42,12 @@ dataset2metric = {
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="meta-llama/Llama-3.2-1B-Instruct")
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
     parser.add_argument("--e", action="store_true", help="Evaluate on LongBench-E")
-    parser.add_argument("--cache_budget", type=float, default=0.6, help="kv cache budget")
+    parser.add_argument("--cache_budget", type=float, default=512, help="kv cache budget")
+    parser.add_argument("--proxy_total", type=int, default=64, help="kv cache budget")
+    parser.add_argument("--proxy_latest", type=int, default=16, help="number of latest window of proxy")
+    parser.add_argument("--n_recursion", type=int, default=1, help="number of recursion for elbow point allocation, [0,1,2,3]")
     return parser.parse_args(args)
 
 
@@ -82,7 +85,7 @@ def scorer(dataset, predictions, answers, all_classes):
 if __name__ == "__main__":
     args = parse_args()
     scores = dict()
-    sub_dir = f"{args.model}-{args.cache_budget}"
+    sub_dir = f"{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
     path = f"pred/{sub_dir}/"
     if args.e:
         path = f"pred_e/{sub_dir}/"
