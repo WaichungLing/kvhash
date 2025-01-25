@@ -22,12 +22,12 @@ LONGBENCH_TASKS = [
     # "2wikimqa",
     # "musique",
     # "dureader",
-    "gov_report",
-    "qmsum",
-    "multi_news",
-    "vcsum",
-    "trec",
-    "triviaqa",
+    # "gov_report",
+    # "qmsum",
+    # "multi_news",
+    # "vcsum",
+    # "trec",
+    # "triviaqa",
     "samsum",
     "lsht",
     "passage_count",
@@ -108,6 +108,8 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                 min_length=context_length + 1,
                 do_sample=False,
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
+                use_cache=True,
+                past_key_values=past_key_value
             )[0]
         else:
             if past_key_value == None:

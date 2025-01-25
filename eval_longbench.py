@@ -45,7 +45,7 @@ def parse_args(args=None):
     parser.add_argument("--enable_eviction", type=bool, default=True, help="whether evict")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
     parser.add_argument("--e", action="store_true", help="Evaluate on LongBench-E")
-    parser.add_argument("--cache_budget", type=float, default=512, help="kv cache budget")
+    parser.add_argument("--cache_budget", type=int, default=512, help="kv cache budget")
     parser.add_argument("--proxy_total", type=int, default=64, help="kv cache budget")
     parser.add_argument("--proxy_latest", type=int, default=16, help="number of latest window of proxy")
     parser.add_argument("--n_recursion", type=int, default=1, help="number of recursion for elbow point allocation, [0,1,2,3]")
