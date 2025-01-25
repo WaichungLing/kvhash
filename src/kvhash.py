@@ -195,11 +195,14 @@ class KVHashCache(Cache):
         flattened_sparsities = grouped_sparsities.flatten()
         sorted_sparsities, sorted_indices = torch.sort(flattened_sparsities)
 
-        # Per-head separation group
-        separation = self.find_elbow_and_separate_recursive(
-            sorted_sparsities, sorted_indices, self.n_recursion)
-        # print("DEBUG", separation)
-
+        if self.n_recursion >= 0:
+            # N-Recursion Per-head separation group
+            separation = self.find_elbow_and_separate_recursive(
+                sorted_sparsities, sorted_indices, self.n_recursion)
+            # print("DEBUG", separation)
+        else:
+            # Softmax allocation
+            separation = sorted_indices.unsqueeze(-1)
         # Budget allocation for each group
         budget_to_token = self.cache_budget * \
             self.config.num_key_value_heads * self.config.num_hidden_layers
@@ -214,12 +217,12 @@ class KVHashCache(Cache):
             budget_to_token / separation_size       # Shape: (2^n)
 
         # eviction
+        # take summation_gqa (l,b, num_kv_head, qlen), separation, budget_allocation
         old_key_cache = self.key_cache
         old_value_cache = self.value_cache
         summation_gqa = summation.view(
             l, b, -1, repeat_factor, qlen).mean(axis=3)  # NOTE: tuning point
         # print(f"DEBUG, g_summation {summation_gqa.shape}")
-        # take summation_gqa (l,b, num_kv_head, qlen), separation, budget_allocation
         new_key_cache = [
             [None for _ in range(self.config.num_key_value_heads)]
             for _ in range(self.config.num_hidden_layers)
