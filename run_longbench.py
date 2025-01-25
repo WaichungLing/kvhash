@@ -37,7 +37,7 @@ LONGBENCH_TASKS = [
     "repobench-p",
 ]
 
-MAX_CONTEXT = 8 * 1024
+MAX_CONTEXT = 32 * 1024
 
 
 def seed_everything(seed):
@@ -191,7 +191,10 @@ def main():
     dataset2prompt = json.load(open("longbench/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("longbench/dataset2maxlen.json", "r"))
 
-    base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
+    if args.enable_eviction:
+        base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
+    else:
+        base_dir = f"{args.pred_dir}/{args.model_name}-gt"
     for dataset in datasets:
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]

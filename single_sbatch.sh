@@ -10,6 +10,7 @@
 # Run the training script
 srun python run_longbench.py \
     --model_name="meta-llama/Llama-3.2-3B-Instruct" \
+    --enable_eviction=True \
     --cache_budget=512 \
     --proxy_total=64 \
     --proxy_latest=16 \

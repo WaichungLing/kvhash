@@ -42,6 +42,7 @@ dataset2metric = {
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument("--enable_eviction", type=bool, default=True, help="whether evict")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
     parser.add_argument("--e", action="store_true", help="Evaluate on LongBench-E")
     parser.add_argument("--cache_budget", type=float, default=512, help="kv cache budget")
@@ -85,7 +86,10 @@ def scorer(dataset, predictions, answers, all_classes):
 if __name__ == "__main__":
     args = parse_args()
     scores = dict()
-    sub_dir = f"{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
+    if args.enable_eviction:
+        sub_dir = f"{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
+    else:
+         sub_dir = f"{args.model_name}-gt"
     path = f"pred/{sub_dir}/"
     if args.e:
         path = f"pred_e/{sub_dir}/"
