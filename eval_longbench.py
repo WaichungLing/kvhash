@@ -87,7 +87,7 @@ if __name__ == "__main__":
     args = parse_args()
     scores = dict()
     if args.enable_eviction:
-        sub_dir = f"{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
+        sub_dir = f"{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}-mean"
     else:
          sub_dir = f"{args.model_name}-gt"
     path = f"pred/{sub_dir}/"

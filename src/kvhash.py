@@ -222,7 +222,7 @@ class KVHashCache(Cache):
         old_value_cache = self.value_cache
         summation_gqa = summation.view(
             l, b, -1, repeat_factor, qlen).mean(axis=3)  # NOTE: tuning point
-        # print(f"DEBUG, g_summation {summation_gqa.shape}")
+        print(f"DEBUG, g_summation {summation_gqa.shape}")
         new_key_cache = [
             [None for _ in range(self.config.num_key_value_heads)]
             for _ in range(self.config.num_hidden_layers)

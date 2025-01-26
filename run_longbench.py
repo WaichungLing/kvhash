@@ -194,7 +194,7 @@ def main():
     dataset2maxlen = json.load(open("longbench/dataset2maxlen.json", "r"))
 
     if args.enable_eviction:
-        base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
+        base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}-mean"
     else:
         base_dir = f"{args.pred_dir}/{args.model_name}-gt"
     for dataset in datasets:

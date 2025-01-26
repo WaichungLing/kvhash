@@ -2,7 +2,7 @@
 #SBATCH --job-name=kv
 #SBATCH --output=kv_%A.out
 #SBATCH --error=kv_%A.err
-#SBATCH --time=600
+#SBATCH --time=1000
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=wling@comp.nus.edu.sg
 #SBATCH --gres=gpu:a100-80:1
@@ -10,6 +10,7 @@
 # Run the training script
 # add --enable_eviction if needed
 srun python run_longbench.py \
+    --enable_eviction \
     --model_name="meta-llama/Llama-3.2-3B-Instruct" \
     --cache_budget=512 \
     --proxy_total=64 \
@@ -20,6 +21,7 @@ srun python run_longbench.py \
 # Run the evaluation script
 # add --enable_eviction if needed
 srun python eval_longbench.py \
+    --enable_eviction \
     --model_name="meta-llama/Llama-3.2-3B-Instruct" \
     --cache_budget=512 \
     --proxy_total=64 \
