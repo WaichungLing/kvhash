@@ -4,8 +4,10 @@
 #SBATCH --error=kv-2_%A.err
 #SBATCH --time=1000
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=wling@comp.nus.edu.sg
+#SBATCH --mail-user=jinfan@comp.nus.edu.sg
 #SBATCH --gres=gpu:a100-80:1
+
+. .venv/bin/activate
 
 # Run the training script
 # add --enable_eviction if needed
@@ -17,7 +19,7 @@ srun python run_longbench.py \
     --proxy_total=64 \
     --proxy_latest=16 \
     --n_recursion=2 \
-    --task="all" >kv.out 2>kv.err
+    --task="all" || exit 1
 
 # Run the evaluation script
 # add --enable_eviction if needed
@@ -28,4 +30,4 @@ srun python eval_longbench.py \
     --cache_budget=512 \
     --proxy_total=64 \
     --proxy_latest=16 \
-    --n_recursion=2 >ev.out 2>ev.err
+    --n_recursion=2 || exit 1
