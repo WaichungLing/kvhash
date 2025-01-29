@@ -10,7 +10,7 @@ def parse_args():
     parser.add_argument("--data_dir", type=str, default="data", help="Cache directory for dataset etc")
     parser.add_argument("--pred_dir", type=str, default="pred", help="Result directory that holds experiment output")
     # unicache
-    parser.add_argument("--enable_eviction", type=bool, default=True, help="whether evict")
+    parser.add_argument("--enable_eviction", action="store_true", default=False, help="whether evict")
     parser.add_argument("--cache_budget", type=int, default=512, help="average kv cache budget per head")
     parser.add_argument("--recent_protect_budget", type=int, default=32, help="number of tokens to be protect at the end")  
     parser.add_argument("--proxy_total", type=int, default=64, help="number of query proxy tokens")

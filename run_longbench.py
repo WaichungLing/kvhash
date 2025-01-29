@@ -13,15 +13,39 @@ from src.kvhash import KVHashCache
 from config import tokens
 from datasets import load_dataset
 
+# LONGBENCH_TASKS = [
+#     "narrativeqa",
+#     "qasper",
+#     "multifieldqa_en",
+#     # "multifieldqa_zh",
+#     "hotpotqa",
+#     "2wikimqa",
+#     # "musique",
+#     # "dureader",
+#     "gov_report",
+#     # "qmsum",
+#     # "multi_news",
+#     # "vcsum",
+#     "trec",
+#     # "triviaqa",
+#     # "samsum",
+#     "lsht",
+#     # "passage_count",
+#     "passage_retrieval_en",
+#     # "passage_retrieval_zh",
+#     # "lcc",
+#     "repobench-p",
+# ]
+
 LONGBENCH_TASKS = [
-    "narrativeqa",
-    "qasper",
-    "multifieldqa_en",
-    "multifieldqa_zh",
-    "hotpotqa",
-    "2wikimqa",
-    "musique",
-    "dureader",
+    # "narrativeqa",
+    # "qasper",
+    # "multifieldqa_en",
+    # "multifieldqa_zh",
+    # "hotpotqa",
+    # "2wikimqa",
+    # "musique",
+    # "dureader",
     "gov_report",
     "qmsum",
     "multi_news",
@@ -37,7 +61,7 @@ LONGBENCH_TASKS = [
     "repobench-p",
 ]
 
-MAX_CONTEXT = 8 * 1024
+MAX_CONTEXT = 32 * 1024
 
 
 def seed_everything(seed):
@@ -108,6 +132,8 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                 min_length=context_length + 1,
                 do_sample=False,
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
+                use_cache=True,
+                past_key_values=past_key_value
             )[0]
         else:
             if past_key_value == None:
@@ -122,8 +148,10 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
         pred = post_process(pred, model_name)
         if past_key_value is not None:
-            print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
+            print(f"===== done. ====")
             past_key_value.clear()
+        
+        print(pred)
 
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
@@ -189,7 +217,10 @@ def main():
     dataset2prompt = json.load(open("longbench/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("longbench/dataset2maxlen.json", "r"))
 
-    base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}"
+    if args.enable_eviction:
+        base_dir = f"{args.pred_dir}/{args.model_name}-{args.recent_protect_budget}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}-mean"
+    else:
+        base_dir = f"{args.pred_dir}/{args.model_name}-gt"
     for dataset in datasets:
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
