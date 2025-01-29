@@ -12,6 +12,7 @@
 srun python run_longbench.py \
     --enable_eviction \
     --model_name="meta-llama/Llama-3.2-3B-Instruct" \
+    --recent_protect_budget=32  \
     --cache_budget=512 \
     --proxy_total=64 \
     --proxy_latest=16 \
@@ -23,6 +24,7 @@ srun python run_longbench.py \
 srun python eval_longbench.py \
     --enable_eviction \
     --model_name="meta-llama/Llama-3.2-3B-Instruct" \
+    --recent_protect_budget=32  \
     --cache_budget=512 \
     --proxy_total=64 \
     --proxy_latest=16 \

@@ -13,15 +13,39 @@ from src.kvhash import KVHashCache
 from config import tokens
 from datasets import load_dataset
 
+# LONGBENCH_TASKS = [
+#     "narrativeqa",
+#     "qasper",
+#     "multifieldqa_en",
+#     # "multifieldqa_zh",
+#     "hotpotqa",
+#     "2wikimqa",
+#     # "musique",
+#     # "dureader",
+#     "gov_report",
+#     # "qmsum",
+#     # "multi_news",
+#     # "vcsum",
+#     "trec",
+#     # "triviaqa",
+#     # "samsum",
+#     "lsht",
+#     # "passage_count",
+#     "passage_retrieval_en",
+#     # "passage_retrieval_zh",
+#     # "lcc",
+#     "repobench-p",
+# ]
+
 LONGBENCH_TASKS = [
-    "narrativeqa",
-    "qasper",
-    "multifieldqa_en",
-    "multifieldqa_zh",
-    "hotpotqa",
-    "2wikimqa",
-    "musique",
-    "dureader",
+    # "narrativeqa",
+    # "qasper",
+    # "multifieldqa_en",
+    # "multifieldqa_zh",
+    # "hotpotqa",
+    # "2wikimqa",
+    # "musique",
+    # "dureader",
     "gov_report",
     "qmsum",
     "multi_news",
@@ -194,7 +218,7 @@ def main():
     dataset2maxlen = json.load(open("longbench/dataset2maxlen.json", "r"))
 
     if args.enable_eviction:
-        base_dir = f"{args.pred_dir}/{args.model_name}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}-mean"
+        base_dir = f"{args.pred_dir}/{args.model_name}-{args.recent_protect_budget}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}-mean"
     else:
         base_dir = f"{args.pred_dir}/{args.model_name}-gt"
     for dataset in datasets:
