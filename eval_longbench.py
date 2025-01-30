@@ -43,7 +43,6 @@ dataset2metric = {
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--enable_eviction", action="store_true", default=False, help="whether evict")
-    parser.add_argument("--recent_protect_budget", type=int, default=32, help="number of tokens to be protect at the end")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
     parser.add_argument("--recent_protect_budget", type=int, default=32, help="number of tokens to be protect at the end")
     parser.add_argument("--e", action="store_true", help="Evaluate on LongBench-E")
