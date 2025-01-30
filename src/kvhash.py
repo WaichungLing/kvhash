@@ -179,15 +179,20 @@ class KVHashCache(Cache):
         # Budget allocation for each group
         budget_to_token = self.cache_budget * self.config.num_key_value_heads * self.config.num_hidden_layers
         separation_gap = torch.zeros(len(separation))
-        separation_size = torch.tensor([len(group) for group in separation], dtype=separation_gap.dtype)
+        separation_size = torch.tensor([len(group) if len(group) != 0 else 1 for group in separation], dtype=separation_gap.dtype)
         for i in range(len(separation)):
-            print("DEBUG", separation[i])
-            print("DEBUG", separation[i][0])
-            print("DEBUG", len(sorted_sparsities))
-            group_max = sorted_sparsities[separation[i][0]]
+            if len(separation[i]) == 0:
+                # group_max = -10000  # -math.inf is NaN
+                group_max = -math.inf
+            else:
+                group_max = sorted_sparsities[separation[i][0]]
             separation_gap[i] = group_max
         allocation_weights = torch.softmax(separation_gap, dim=0)
+        print("DEBUG", "allocation_weights", allocation_weights)
+        print("DEBUG", "separation_size", separation_size)
+        print("DEBUG", "budget_to_token", budget_to_token)
         budget_allocation = allocation_weights * budget_to_token / separation_size  # Shape: (2^n)
+        print("DEBUG", "budget_allocation", budget_allocation)
 
         # eviction
         # take summation_gqa (l,b, num_kv_head, qlen), separation, budget_allocation
@@ -254,6 +259,9 @@ class KVHashCache(Cache):
 
         # Find the elbow point
         n = sorted_sparsities.size(0)
+        if n == 0:
+            return []
+
         x = torch.arange(n, dtype=torch.float32).to(sorted_sparsities.device)
         start = torch.stack((x[0], sorted_sparsities[0]))
         end = torch.stack((x[-1], sorted_sparsities[-1]))
