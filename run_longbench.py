@@ -13,11 +13,15 @@ from src.kvhash import KVHashCache
 from config import tokens
 from datasets import load_dataset
 
-LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh", "hotpotqa", "2wikimqa", "musique", \
-                    "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
-                    "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
+LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh", "hotpotqa", "2wikimqa", "musique",
+                   "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht",
+                   "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
+
+# LONGBENCH_TASKS = ["vcsum", "trec", "triviaqa", "samsum", "lsht",
+#                    "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
 
 MAX_CONTEXT = 4*1024
+
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -27,6 +31,7 @@ def seed_everything(seed):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.cuda.manual_seed_all(seed)
+
 
 def build_chat(tokenizer, prompt, model_name):
     if "chatglm3" in model_name:
@@ -51,6 +56,7 @@ def build_chat(tokenizer, prompt, model_name):
         prompt = f"<|User|>:{prompt}<eoh>\n<|Bot|>:"
     return prompt
 
+
 def post_process(response, model_name):
     if "xgen" in model_name:
         response = response.strip().replace("Assistant:", "")
@@ -58,38 +64,47 @@ def post_process(response, model_name):
         response = response.split("<eoa>")[0]
     return response
 
+
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
-    file_name = f'pred/sparsity_h2o/{dataset}_sparsity.jsonl'
+    file_name = f'pred/sparsity_mp_32/{dataset}_sparsity.jsonl'
     idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
-        tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt").input_ids[0]
+        tokenized_prompt = tokenizer(
+            prompt, truncation=False, return_tensors="pt").input_ids[0]
         if "chatglm3" in model_name:
-            tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt", add_special_tokens=False).input_ids[0]
+            tokenized_prompt = tokenizer(
+                prompt, truncation=False, return_tensors="pt", add_special_tokens=False).input_ids[0]
         if len(tokenized_prompt) > MAX_CONTEXT:
             half = int(MAX_CONTEXT/2)
             # prompt = tokenizer.decode(tokenized_prompt[:half], skip_special_tokens=True)+tokenizer.decode(tokenized_prompt[-half:], skip_special_tokens=True)
-            prompt = tokenizer.decode(tokenized_prompt[-MAX_CONTEXT:], skip_special_tokens=True)
-        if dataset not in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench-p"]: # chat models are better off without build prompts on these tasks
+            prompt = tokenizer.decode(
+                tokenized_prompt[-MAX_CONTEXT:], skip_special_tokens=True)
+        # chat models are better off without build prompts on these tasks
+        if dataset not in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench-p"]:
             prompt = build_chat(tokenizer, prompt, model_name)
         if "chatglm3" in model_name:
             if dataset in ["trec", "triviaqa", "samsum", "lsht", "lcc", "repobench-p"]:
-                input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
+                input = tokenizer(prompt, truncation=False,
+                                  return_tensors="pt").to(device)
             else:
                 input = prompt.to(device)
         else:
-            input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
+            input = tokenizer(prompt, truncation=False,
+                              return_tensors="pt").to(device)
         context_length = input.input_ids.shape[-1]
 
-        if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
+        # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
+        if dataset == "samsum":
             output = model.generate(
                 **input,
                 max_new_tokens=max_gen,
                 min_length=context_length+1,
                 use_cache=True,
-                past_key_values = past_key_value,
-                eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
+                past_key_values=past_key_value,
+                eos_token_id=[tokenizer.eos_token_id, tokenizer.encode(
+                    "\n", add_special_tokens=False)[-1]],
             )[0]
         else:
             if past_key_value == None:
@@ -103,20 +118,22 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                     **input,
                     max_new_tokens=max_gen,
                     use_cache=True,
-                    past_key_values = past_key_value
+                    past_key_values=past_key_value
                 )[0]
-        pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
+        pred = tokenizer.decode(
+            output[context_length:], skip_special_tokens=True)
         pred = post_process(pred, model_name)
         if past_key_value is not None:
-            print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
+            print(
+                f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
 
             # ======= unicache expr ========
             with open(file_name, "a", encoding="utf-8") as f:
-                json.dump({'h2o': past_key_value.attn_sparsity 
-                           # 'tail': past_key_value.attn_sparstiy_hash
-                        #    'pca_qk': past_key_value.attn_sparsity_pca_qk,
-                        #    'pca_qq': past_key_value.attn_sparsity_pca_qq
-                        }, f, ensure_ascii=False)
+                json.dump({
+                    #'tail': past_key_value.attn_sparsity_tail,
+                    'pca_qk': past_key_value.attn_sparsity_pca_qk,
+                    'pca_qq': past_key_value.attn_sparsity_pca_qq
+                }, f, ensure_ascii=False)
                 f.write('\n')
             # ==============================
 
@@ -149,6 +166,7 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
 
     # dist.destroy_process_group()
 
+
 def main():
     seed_everything(42)
 
@@ -164,7 +182,7 @@ def main():
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name,
-        cache_dir = args.cache_dir,
+        cache_dir=args.cache_dir,
         token=tokens.HF_TOKEN
     )
     if tokenizer.pad_token_id is None:
@@ -172,7 +190,7 @@ def main():
 
     print("Loading config...")
     config = AutoConfig.from_pretrained(
-        args.model_name, 
+        args.model_name,
         cache_dir=args.cache_dir,
         token=tokens.HF_TOKEN
     )
@@ -184,9 +202,9 @@ def main():
 
     print("Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_name, 
+        args.model_name,
         config=config,
-        cache_dir = args.cache_dir,
+        cache_dir=args.cache_dir,
         attn_implementation="eager",
         token=tokens.HF_TOKEN
     )
@@ -202,9 +220,9 @@ def main():
     if args.enable_kvhash:
         past_key_value = KVHashCache(
             config,
-            cache_budget = args.cache_budget,
-            sink_protect_tokens = args.sink_protect_tokens,
-            recent_protect_budget = args.recent_protect_budget,
+            cache_budget=args.cache_budget,
+            sink_protect_tokens=args.sink_protect_tokens,
+            recent_protect_budget=args.recent_protect_budget,
         ).to(args.device)
 
     # Prepare dataset
@@ -213,7 +231,7 @@ def main():
     else:
         if args.task in LONGBENCH_TASKS:
             datasets = [args.task]
-    
+
     dataset2prompt = json.load(open("longbench/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("longbench/dataset2maxlen.json", "r"))
 
@@ -224,11 +242,14 @@ def main():
             os.makedirs(f"{args.pred_dir}/{args.model_name}")
         out_path = f"{args.pred_dir}/{args.model_name}/{dataset}.jsonl"
 
-        print(f"Prepareing dataset {dataset}, max_gen = {max_gen}, out_path = {out_path}")
-        data = load_dataset('THUDM/LongBench', dataset, split='test',cache_dir=args.data_dir)
+        print(
+            f"Prepareing dataset {dataset}, max_gen = {max_gen}, out_path = {out_path}")
+        data = load_dataset('THUDM/LongBench', dataset,
+                            split='test', cache_dir=args.data_dir)
         print("Load dataset done")
 
-        get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, args.device, args.model_name, out_path)
+        get_pred(model, tokenizer, past_key_value, data, max_gen,
+                 prompt_format, dataset, args.device, args.model_name, out_path)
 
 
 if __name__ == "__main__":
