@@ -7,6 +7,8 @@
 #SBATCH --mail-user=jinfan@comp.nus.edu.sg
 #SBATCH --gres=gpu:a100-80:1
 
+. .venv/bin/activate
+
 # Run the training script
 # add --enable_eviction if needed
 srun python run_longbench.py \
@@ -17,7 +19,7 @@ srun python run_longbench.py \
     --proxy_total=64 \
     --proxy_latest=16 \
     --n_recursion=-1 \
-    --task="all" >kv.out 2>kv.err
+    --task="all"
 
 # Run the evaluation script
 # add --enable_eviction if needed
@@ -28,4 +30,4 @@ srun python eval_longbench.py \
     --cache_budget=512 \
     --proxy_total=64 \
     --proxy_latest=16 \
-    --n_recursion=-1 >ev.out 2>ev.err
+    --n_recursion=-1
