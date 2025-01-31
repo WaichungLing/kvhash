@@ -81,24 +81,8 @@ def post_process(response, model_name):
         response = response.split("<eoa>")[0]
     return response
 
-
-def get_pred(
-    model,
-    tokenizer,
-    past_key_value,
-    data,
-    max_gen,
-    prompt_format,
-    dataset,
-    device,
-    model_name,
-    n_latest,
-    out_path,
-):
-    n_pca = 64 - n_latest
-    file_name = f"pred/sparsity_{n_latest}/{dataset}_sparsity.jsonl"
-    path_name = f"pred/sparsity_{n_latest}/"
-    os.makedirs(path_name, exist_ok=True)
+def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
+    file_name = f'pred/sparsity_mp_16/{dataset}_sparsity.jsonl'
     idx = 0
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
@@ -171,17 +155,12 @@ def get_pred(
 
             # ======= unicache expr ========
             with open(file_name, "a", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "gt": past_key_value.attn_sparsity,
-                        # 'tail': past_key_value.attn_sparstiy_hash
-                        "pca_qk": past_key_value.attn_sparsity_pca_qk,
-                        "pca_qq": past_key_value.attn_sparsity_pca_qq,
-                    },
-                    f,
-                    ensure_ascii=False,
-                )
-                f.write("\n")
+                json.dump({ 
+                           'tail': past_key_value.attn_sparsity_tail,
+                           'pca_qk': past_key_value.attn_sparsity_pca_qk,
+                           'pca_qq': past_key_value.attn_sparsity_pca_qq
+                        }, f, ensure_ascii=False)
+                f.write('\n')
             # ==============================
 
             # ======== get qka npy =========
