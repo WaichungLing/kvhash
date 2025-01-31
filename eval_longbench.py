@@ -39,26 +39,18 @@ dataset2metric = {
     "repobench-p": code_sim_score,
 }
 
-
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--enable_eviction", action="store_true", default=False, help="whether evict")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
-    parser.add_argument("--recent_protect_budget", type=int, default=32, help="number of tokens to be protect at the end")
-    parser.add_argument("--e", action="store_true", help="Evaluate on LongBench-E")
-    parser.add_argument("--cache_budget", type=int, default=512, help="kv cache budget")
-    parser.add_argument("--proxy_total", type=int, default=64, help="kv cache budget")
-    parser.add_argument("--proxy_latest", type=int, default=16, help="number of latest window of proxy")
-    parser.add_argument("--n_recursion", type=int, default=1, help="number of recursion for elbow point allocation, [0,1,2,3]")
+    parser.add_argument('--model', type=str, default="meta-llama/Llama-3.2-1B-Instruct")
+    parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
     return parser.parse_args(args)
-
 
 def scorer_e(dataset, predictions, answers, lengths, all_classes):
     scores = {"0-4k": [], "4-8k": [], "8k+": []}
-    for prediction, ground_truths, length in zip(predictions, answers, lengths):
-        score = 0.0
+    for (prediction, ground_truths, length) in zip(predictions, answers, lengths):
+        score = 0.
         if dataset in ["trec", "triviaqa", "samsum", "lsht"]:
-            prediction = prediction.lstrip("\n").split("\n")[0]
+            prediction = prediction.lstrip('\n').split('\n')[0]
         for ground_truth in ground_truths:
             score = max(score, dataset2metric[dataset](prediction, ground_truth, all_classes=all_classes))
         if length < 4000:
@@ -71,37 +63,31 @@ def scorer_e(dataset, predictions, answers, lengths, all_classes):
         scores[key] = round(100 * np.mean(scores[key]), 2)
     return scores
 
-
 def scorer(dataset, predictions, answers, all_classes):
-    total_score = 0.0
-    for prediction, ground_truths in zip(predictions, answers):
-        score = 0.0
+    total_score = 0.
+    for (prediction, ground_truths) in zip(predictions, answers):
+        score = 0.
         if dataset in ["trec", "triviaqa", "samsum", "lsht"]:
-            prediction = prediction.lstrip("\n").split("\n")[0]
+            prediction = prediction.lstrip('\n').split('\n')[0]
         for ground_truth in ground_truths:
             score = max(score, dataset2metric[dataset](prediction, ground_truth, all_classes=all_classes))
         total_score += score
     return round(100 * total_score / len(predictions), 2)
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     args = parse_args()
     scores = dict()
-    if args.enable_eviction:
-        sub_dir = f"{args.model_name}-{args.recent_protect_budget}-{args.cache_budget}-{args.proxy_total}-{args.proxy_latest}-{args.n_recursion}"
-    else:
-        sub_dir = f"{args.model_name}-gt"
-    path = f"pred/{sub_dir}/"
     if args.e:
-        path = f"pred_e/{sub_dir}/"
+        path = f"pred_e/{args.model}/"
+    else:
+        path = f"pred/{args.model}/"
     all_files = os.listdir(path)
     print("Evaluating on:", all_files)
     for filename in all_files:
         if not filename.endswith("jsonl"):
             continue
         predictions, answers, lengths = [], [], []
-        dataset = filename.split(".")[0]
-        all_classes = None
+        dataset = filename.split('.')[0]
         with open(f"{path}/{filename}", "r", encoding="utf-8") as f:
             for line in f:
                 data = json.loads(line)
@@ -115,6 +101,9 @@ if __name__ == "__main__":
         else:
             score = scorer(dataset, predictions, answers, all_classes)
         scores[dataset] = score
-    out_path = f"{path}/result.json"
+    if args.e:
+        out_path = f"pred_e/{args.model}/result.json"
+    else:
+        out_path = f"pred/{args.model}/result.json"
     with open(out_path, "w") as f:
         json.dump(scores, f, ensure_ascii=False, indent=4)

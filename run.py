@@ -37,14 +37,15 @@ def main():
     print("Loading everything done")
 
     past_key_value = DynamicCache().to(args.device)
-    # if args.enable_kvhash:
-    #     past_key_value = KVHashCache(
-    #         config,
-    #         cache_budget = args.cache_budget,
-    #         sink_protect_tokens = args.sink_protect_tokens,
-    #         recent_protect_budget = args.recent_protect_budget,
-    #         num_planes=args.num_planes
-    #     ).to(args.device)
+    if args.enable_kvhash:
+        past_key_value = KVHashCache(
+            config,
+            cache_budget = args.cache_budget,
+            sink_protect_tokens = args.sink_protect_tokens,
+            recent_protect_budget = args.recent_protect_budget,
+            num_planes=args.num_planes
+            n_latest = args.n_latest,
+        ).to(args.device)
 
     input_text = "Compare the Llama model and GPT model"
     max_length = 50

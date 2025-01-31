@@ -105,35 +105,12 @@ def my_forward(
             #     f" {target_dtype}."
             # )
 
-            query_states = query_states.to(target_dtype)
-            key_states = key_states.to(target_dtype)
-            value_states = value_states.to(target_dtype)
+        # past_key_value.update_hash_values(self.layer_idx, query_states)
 
-        attn_output = _flash_attention_forward(
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            q_len,
-            position_ids=position_ids,
-            dropout=dropout_rate,
-            sliding_window=getattr(self, "sliding_window", None),
-            use_top_left_mask=self._flash_attn_uses_top_left_mask,
-            is_causal=self.is_causal,
-        )
-        attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
-    else:
-        # ============== DECODE ================ #
-        Q_4d = query_states.transpose(1,2)      # (bsz, query_length, num_attn_heads, hidden)
-        batch_size, q_len, n_qheads, d_qhead = Q_4d.shape
-        assert batch_size == 1 and q_len == 1, "This code expects batch=1, single token decode."
-        
-        repeat_factor = self.config.num_attention_heads // self.config.num_key_value_heads
-        head_outputs = []
-        for i in range(n_qheads):  # 0..23
-            q_i = Q_4d[0, 0, i, :]  # shape (128,)
-            
-            kv_idx = i // repeat_factor  # e.g. i//3
+        if past_key_value is not None: #TODO add not self.config.enable_kvhash and
+            # sin and cos are specific to RoPE models; cache_position needed for the static cache
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, query_states, self.layer_idx, cache_kwargs)
 
             K_i = key_states[kv_idx]  # shape (seqLen_i, 128)
             V_i = value_states[kv_idx]  # shape (seqLen_i, 128)
@@ -150,8 +127,12 @@ def my_forward(
             out_i = out_i_2d.squeeze(0)               # => (128,)
             head_outputs.append(out_i)
 
-        all_heads = torch.stack(head_outputs, dim=0)  # => (24,128)
-        attn_output = all_heads.view(1, 1, n_qheads * d_qhead)
+        past_key_value.update_attn(query_states, key_states, attn_weights, self.layer_idx)
+
+        # if self.config.enable_kvhash:
+        #     past_key_value.update_attn_sum(self.layer_idx, attn_weights)
+        #     if key_states.shape[2] > self.config.min_eviction_seqlen and past_key_value.is_eviction_needed(self.layer_idx):
+        #         past_key_value.evict(self.layer_idx)
 
     # print(f"INSIGHTS: attn_output {attn_output.shape}")
     attn_output = self.o_proj(attn_output)
