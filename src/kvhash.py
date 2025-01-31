@@ -1,6 +1,7 @@
 import torch
 import math
 import time
+import torch.nn.functional as F
 from torch import nn
 from typing import Any, Dict, List, Optional, Tuple
 from transformers.cache_utils import Cache
@@ -20,6 +21,7 @@ class KVHashCache(Cache):
         self.n_recursion = n_recursion
 
         self._seen_tokens = 0
+        self.kernel_size = 7
 
         # [(batch, num_key_value_head, qlen, hidden)] * layer
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
@@ -112,8 +114,10 @@ class KVHashCache(Cache):
             """
             # print(f"DEBUG: DECODING")
             for h_id in range(self.config.num_key_value_heads):
-                old_k = self.key_cache[layer_idx][h_id]  # shape (keep_i, hidden)
-                old_v = self.value_cache[layer_idx][h_id]  # shape (keep_i, hidden)
+                # shape (keep_i, hidden)
+                old_k = self.key_cache[layer_idx][h_id]
+                # shape (keep_i, hidden)
+                old_v = self.value_cache[layer_idx][h_id]
                 new_k = key_states[0, h_id]  # shape (1, hidden)
                 new_v = value_states[0, h_id]
 
@@ -182,7 +186,6 @@ class KVHashCache(Cache):
         separation_size = torch.tensor([len(group) if len(group) != 0 else 1 for group in separation], dtype=separation_gap.dtype)
         for i in range(len(separation)):
             if len(separation[i]) == 0:
-                # group_max = -10000  # -math.inf is NaN
                 group_max = -math.inf
             else:
                 group_max = sorted_sparsities[separation[i][0]]
@@ -198,19 +201,32 @@ class KVHashCache(Cache):
         # take summation_gqa (l,b, num_kv_head, qlen), separation, budget_allocation
         old_key_cache = self.key_cache
         old_value_cache = self.value_cache
-        summation_gqa = summation.view(l, b, -1, repeat_factor, qlen).mean(axis=3)  # NOTE: tuning point
-        print(f"DEBUG, g_summation {summation_gqa.shape}")
-        new_key_cache = [[None for _ in range(self.config.num_key_value_heads)] for _ in range(self.config.num_hidden_layers)]
-        new_value_cache = [[None for _ in range(self.config.num_key_value_heads)] for _ in range(self.config.num_hidden_layers)]
+        summation_gqa = summation.view(
+            l, b, -1, repeat_factor, qlen).mean(axis=3)  # NOTE: tuning point
+        # print(f"DEBUG, g_summation {summation_gqa.shape}")
+        # ADD POOLING
+        new_key_cache = [
+            [None for _ in range(self.config.num_key_value_heads)]
+            for _ in range(self.config.num_hidden_layers)
+        ]
+        new_value_cache = [
+            [None for _ in range(self.config.num_key_value_heads)]
+            for _ in range(self.config.num_hidden_layers)
+        ]
         for i in range(len(separation)):
             b_i = int(budget_allocation[i])
             for j in range(len(separation[i])):
                 g_id = separation[i][j]
                 layer_idx = g_id // self.config.num_key_value_heads
                 kv_head_idx = g_id % self.config.num_key_value_heads
-                keep_idx = self.head_eviction(summation_gqa[layer_idx, 0, kv_head_idx, :], layer_idx, kv_head_idx, b_i)
-                new_key_cache[layer_idx][kv_head_idx] = self.key_cache[layer_idx][0, kv_head_idx, keep_idx, :].clone()
-                new_value_cache[layer_idx][kv_head_idx] = self.value_cache[layer_idx][0, kv_head_idx, keep_idx, :].clone()
+                keep_idx = self.head_eviction(
+                    summation_gqa[layer_idx, 0, kv_head_idx, :], layer_idx, kv_head_idx, b_i)
+                new_key_cache[layer_idx][kv_head_idx] = \
+                    self.key_cache[layer_idx][0,
+                                              kv_head_idx, keep_idx, :].clone()
+                new_value_cache[layer_idx][kv_head_idx] = \
+                    self.value_cache[layer_idx][0,
+                                                kv_head_idx, keep_idx, :].clone()
         self.key_cache = new_key_cache
         self.value_cache = new_value_cache
 
@@ -229,14 +245,21 @@ class KVHashCache(Cache):
         if budget < self.recent_protect_budget:
             #    print(
             #        "DEBUG [head_eviction] Force retaining the latest window, return")
-            return torch.arange(scorer.size(0) - self.recent_protect_budget, scorer.size(0), device=scorer.device)
+            return torch.arange(
+                scorer.size(0) - self.recent_protect_budget, scorer.size(0), device=scorer.device)
 
-        if budget - self.recent_protect_budget > scorer[: -self.recent_protect_budget].numel():
+        if budget - self.recent_protect_budget > scorer[:-self.recent_protect_budget].numel():
             return torch.arange(0, scorer.size(0), device=scorer.device)
 
+        # ADD Pooling
+        scorer_pooled = F.max_pool1d(
+            scorer, kernel_size=self.kernel_size, padding=self.kernel_size//2, stride=1)
+
         # Identify indices to keep using top-k and protect the recent window
-        _, keep_idx = torch.topk(scorer[: -self.recent_protect_budget], k=budget - self.recent_protect_budget, largest=True)
-        keep_idx = torch.cat((keep_idx, torch.arange(scorer.size(0) - self.recent_protect_budget, scorer.size(0), device=keep_idx.device)))
+        _, keep_idx = torch.topk(
+            scorer_pooled, k=budget - self.recent_protect_budget, largest=True)
+        keep_idx = torch.cat((keep_idx, torch.arange(
+            scorer.size(0) - self.recent_protect_budget, scorer.size(0), device=keep_idx.device)))
         keep_idx = keep_idx.sort().values
         # print(f"DEBUG [head_eviction] Keeping indices: {keep_idx.tolist()}")
         return keep_idx
@@ -261,7 +284,6 @@ class KVHashCache(Cache):
         n = sorted_sparsities.size(0)
         if n == 0:
             return []
-
         x = torch.arange(n, dtype=torch.float32).to(sorted_sparsities.device)
         start = torch.stack((x[0], sorted_sparsities[0]))
         end = torch.stack((x[-1], sorted_sparsities[-1]))
