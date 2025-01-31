@@ -1,7 +1,7 @@
 #!/bin/sh
-#SBATCH --job-name=kv
-#SBATCH --output=kv_%A.out
-#SBATCH --error=kv_%A.err
+#SBATCH --job-name=kv-l16
+#SBATCH --output=kv-l16_%A.out
+#SBATCH --error=kv-l16_%A.err
 #SBATCH --time=500
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jinfan@comp.nus.edu.sg
@@ -15,7 +15,7 @@ srun python run_longbench.py \
     --recent_protect_budget=64 \
     --cache_budget=512 \
     --proxy_total=64 \
-    --proxy_latest=32 \
+    --proxy_latest=16 \
     --n_recursion=-1 \
     --task="all" >kv.out 2>kv.err
 
@@ -27,5 +27,5 @@ srun python eval_longbench.py \
     --recent_protect_budget=64 \
     --cache_budget=512 \
     --proxy_total=64 \
-    --proxy_latest=32 \
+    --proxy_latest=16 \
     --n_recursion=-1 >ev.out 2>ev.err
