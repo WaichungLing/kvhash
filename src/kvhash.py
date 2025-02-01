@@ -215,20 +215,23 @@ class KVHashCache(Cache):
         # Budget allocation for each group
         budget_to_token = self.cache_budget * \
             self.config.num_key_value_heads * self.config.num_hidden_layers
-        separation_gap = torch.zeros(len(separation))
-        separation_size = torch.tensor(
-            [len(group) for group in separation], dtype=separation_gap.dtype)
+        weights = torch.zeros(len(flattened_sparsities))
+        # separation_size = torch.tensor(
+        #     [len(group) for group in separation], dtype=separation_gap.dtype)
+        done = 0
         for i in range(len(separation)):
             if len(separation[i]) == 0:
                 group_max = -math.inf
             else:
                 group_max = flattened_sparsities[separation[i][0]]
-            separation_gap[i] = group_max
-        print("DEBUG", separation_gap)
-        allocation_weights = torch.softmax(separation_gap, dim=0)
+            for j in range(len(separation[i])):
+                weights[done+j] = group_max
+            done += len(separation[i])
+            # separation_gap[i] = group_max
+        print("DEBUG", weights)
+        allocation_weights = torch.softmax(weights*-1, dim=0)
         print("DEBUG", allocation_weights)
-        budget_allocation = allocation_weights * \
-            budget_to_token / separation_size       # Shape: (2^n)
+        budget_allocation = allocation_weights * budget_to_token
         print("DEBUG", budget_allocation)
 
         # eviction
