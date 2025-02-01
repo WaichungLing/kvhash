@@ -15,7 +15,7 @@ srun python run_longbench.py \
     --recent_protect_budget=64  \
     --cache_budget=512 \
     --proxy_total=64 \
-    --proxy_latest=32 \
+    --proxy_latest=64 \
     --n_recursion=-1 \
     --task="all" > kv.out 2> kv.err
 
@@ -27,5 +27,5 @@ srun python eval_longbench.py \
     --recent_protect_budget=64  \
     --cache_budget=512 \
     --proxy_total=64 \
-    --proxy_latest=32 \
+    --proxy_latest=64 \
     --n_recursion=-1 > ev.out 2> ev.err

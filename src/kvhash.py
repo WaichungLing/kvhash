@@ -196,14 +196,19 @@ class KVHashCache(Cache):
             dim=-1)    # Shape: (num_layers, batch, num_key_value_head)
         # print(f"DEBUG, g_sparsity {grouped_sparsities.shape}")
         # (num_layer * num_key_value_heads, ), ASSUMES BATCH = 1
+        print("DEBUG", grouped_sparsities)
         flattened_sparsities = grouped_sparsities.flatten()
+        print("DEBUG", flattened_sparsities)
         sorted_sparsities, sorted_indices = torch.sort(flattened_sparsities)
+        print("DEBUG", sorted_sparsities)
+        print("DEBUG", sorted_indices)
+        print("===========")
 
         if self.n_recursion >= 0:
             # N-Recursion Per-head separation group
             separation = self.find_elbow_and_separate_recursive(
                 sorted_sparsities, sorted_indices, self.n_recursion)
-            # print("DEBUG", separation)
+            print("DEBUG", separation)
         else:
             # Softmax allocation
             separation = sorted_indices.unsqueeze(-1)
@@ -217,11 +222,14 @@ class KVHashCache(Cache):
             if len(separation[i]) == 0:
                 group_max = -math.inf
             else:
-                group_max = sorted_sparsities[separation[i][0]]
+                group_max = flattened_sparsities[separation[i][0]]
             separation_gap[i] = group_max
+        print("DEBUG", separation_gap)
         allocation_weights = torch.softmax(separation_gap, dim=0)
+        print("DEBUG", allocation_weights)
         budget_allocation = allocation_weights * \
             budget_to_token / separation_size       # Shape: (2^n)
+        print("DEBUG", budget_allocation)
 
         # eviction
         # take summation_gqa (l,b, num_kv_head, qlen), separation, budget_allocation
@@ -266,8 +274,8 @@ class KVHashCache(Cache):
         """
             budget is the number of token to keep
         """
-        # print(
-        #    f"DEBUG [head_eviction], scorer {scorer.shape}, l={l_id}, h={h_id}, b={budget}")
+        print(
+           f"DEBUG [head_eviction], scorer {scorer.shape}, l={l_id}, h={h_id}, b={budget}")
         if budget < self.recent_protect_budget:
             #    print(
             #        "DEBUG [head_eviction] Force retaining the latest window, return")
@@ -287,7 +295,7 @@ class KVHashCache(Cache):
         _, keep_idx = torch.topk(
             scorer_pooled, k=budget - self.recent_protect_budget, largest=True)
         keep_idx = torch.cat((keep_idx, torch.arange(
-            scorer.size(0) - self.recent_protect_budget, scorer.size(0), device=keep_idx.device)))
+            scorer.size(0) - self.recent_protect_budget, scorer_pooled.size(0), device=keep_idx.device)))
         keep_idx = keep_idx.sort().values
         # print(f"DEBUG [head_eviction] Keeping indices: {keep_idx.tolist()}")
         return keep_idx

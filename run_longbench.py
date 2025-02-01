@@ -152,6 +152,8 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
             past_key_value.clear()
         
         print(pred)
+        if idx == 0:
+            break
 
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
