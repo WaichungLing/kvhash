@@ -13,53 +13,53 @@ from src.kvhash import KVHashCache
 from config import tokens
 from datasets import load_dataset
 
-LONGBENCH_TASKS = [
-    "narrativeqa",
-    "qasper",
-    "multifieldqa_en",
-    # "multifieldqa_zh",
-    "hotpotqa",
-    "2wikimqa",
-    # "musique",
-    # "dureader",
-    "gov_report",
-    # "qmsum",
-    # "multi_news",
-    # "vcsum",
-    "trec",
-    # "triviaqa",
-    # "samsum",
-    "lsht",
-    # "passage_count",
-    "passage_retrieval_en",
-    # "passage_retrieval_zh",
-    # "lcc",
-    "repobench-p",
-]
-
 # LONGBENCH_TASKS = [
 #     "narrativeqa",
 #     "qasper",
 #     "multifieldqa_en",
-#     "multifieldqa_zh",
+#     # "multifieldqa_zh",
 #     "hotpotqa",
 #     "2wikimqa",
-#     "musique",
-#     "dureader",
+#     # "musique",
+#     # "dureader",
 #     "gov_report",
-#     "qmsum",
-#     "multi_news",
-#     "vcsum",
+#     # "qmsum",
+#     # "multi_news",
+#     # "vcsum",
 #     "trec",
-#     "triviaqa",
-#     "samsum",
+#     # "triviaqa",
+#     # "samsum",
 #     "lsht",
-#     "passage_count",
+#     # "passage_count",
 #     "passage_retrieval_en",
-#     "passage_retrieval_zh",
-#     "lcc",
+#     # "passage_retrieval_zh",
+#     # "lcc",
 #     "repobench-p",
 # ]
+
+LONGBENCH_TASKS = [
+    "narrativeqa",
+    "qasper",
+    "multifieldqa_en",
+    "multifieldqa_zh",
+    "hotpotqa",
+    "2wikimqa",
+    "musique",
+    "dureader",
+    "gov_report",
+    "qmsum",
+    "multi_news",
+    "vcsum",
+    "trec",
+    "triviaqa",
+    "samsum",
+    "lsht",
+    "passage_count",
+    "passage_retrieval_en",
+    "passage_retrieval_zh",
+    "lcc",
+    "repobench-p",
+]
 
 MAX_CONTEXT = 32 * 1024
 
@@ -152,8 +152,6 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
             past_key_value.clear()
         
         print(pred)
-        if idx == 0:
-            break
 
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
