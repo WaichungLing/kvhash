@@ -1,8 +1,8 @@
 #!/bin/sh
-#SBATCH --job-name=kv-l16
-#SBATCH --output=kv-l16_%A.out
-#SBATCH --error=kv-l16_%A.err
-#SBATCH --time=500
+#SBATCH --job-name=kv
+#SBATCH --output=kv_%A.out
+#SBATCH --error=kv_%A.err
+#SBATCH --time=100
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jinfan@comp.nus.edu.sg
 #SBATCH --gres=gpu:a100-80:1

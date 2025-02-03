@@ -116,7 +116,7 @@ class KVHashCache(Cache):
                 one_k = key_states[0, int(i//self.config.num_key_value_heads)]
                 t1 = time.time_ns()
                 indices = self.pca_select(
-                    one_q, one_k, self.top_rank, self.proxy_total, self.proxy_latest)
+                    one_q, one_q, self.top_rank, self.proxy_total, self.proxy_latest)
                 dt = time.time_ns() - t1
                 # print(f"[DEBUG] dt {dt}")
                 one_proxy = one_q[indices, :]      # (proxy_total, num_hidden)
@@ -178,17 +178,25 @@ class KVHashCache(Cache):
         attn_probs = torch.softmax(attn_scores, dim=-1)
         # print(f"DEBUG, proxy attn {attn_probs.shape}")
         # Shape: (num_layers, batch, num_attention_head, qlen)
-        summation = torch.sum(attn_probs, dim=-2)
-        # print(f"DEBUG, summation {summation.shape}")
+        attn_votes = torch.mean(attn_probs, dim=-2)
+        # print(f"DEBUG, attn_votes {attn_votes.shape}")
+        attn_votes_reshaped = attn_votes.view(-1, 1, attn_votes.size(-1))
+        attn_votes_pooled = F.avg_pool1d(
+            attn_votes_reshaped, 
+            kernel_size=self.kernel_size, 
+            padding=self.kernel_size // 2, 
+            stride=1
+        )
+        attn_votes = attn_votes_pooled.view(l, b, self.config.num_attention_heads, -1)
         # Shape: (num_layers, batch, num_attention_head)
-        maximum, _ = torch.max(summation, dim=-1)
+        maximum, _ = torch.max(attn_votes, dim=-1)
         # Shape: (num_layers, batch, num_attention_head)
-        minimum, _ = torch.min(summation, dim=-1)
+        minimum, _ = torch.min(attn_votes, dim=-1)
         # print(f"DEBUG, min/max {maximum.shape}")
         threshold = minimum + 0.0005 * (maximum - minimum)
         # Shape: (num_layers, batch, num_attention_head)
         sparsity = torch.sum(
-            summation < threshold.unsqueeze(-1), dim=-1) / summation.shape[-1]
+            attn_votes < threshold.unsqueeze(-1), dim=-1) / attn_votes.shape[-1]
         # print(f"DEBUG, sparsity {sparsity}")
 
         # GQA processing
@@ -196,8 +204,13 @@ class KVHashCache(Cache):
             dim=-1)    # Shape: (num_layers, batch, num_key_value_head)
         # print(f"DEBUG, g_sparsity {grouped_sparsities.shape}")
         # (num_layer * num_key_value_heads, ), ASSUMES BATCH = 1
+        # print("DEBUG", grouped_sparsities)
         flattened_sparsities = grouped_sparsities.flatten()
+        # print("DEBUG", flattened_sparsities)
         sorted_sparsities, sorted_indices = torch.sort(flattened_sparsities)
+        # rint("DEBUG", sorted_sparsities)
+        # print("DEBUG", sorted_indices)
+        # print("===========")
 
         if self.n_recursion >= 0:
             # N-Recursion Per-head separation group
@@ -210,24 +223,31 @@ class KVHashCache(Cache):
         # Budget allocation for each group
         budget_to_token = self.cache_budget * \
             self.config.num_key_value_heads * self.config.num_hidden_layers
-        separation_gap = torch.zeros(len(separation))
-        separation_size = torch.tensor(
-            [len(group) for group in separation], dtype=separation_gap.dtype)
+        weights = torch.zeros(len(flattened_sparsities))
+        # separation_size = torch.tensor(
+        #     [len(group) for group in separation], dtype=separation_gap.dtype)
+        done = 0
         for i in range(len(separation)):
             if len(separation[i]) == 0:
-                group_max = -math.inf
+                # group_max = -math.inf
+                continue
             else:
-                group_max = sorted_sparsities[separation[i][0]]
-            separation_gap[i] = group_max
-        allocation_weights = torch.softmax(separation_gap, dim=0)
-        budget_allocation = allocation_weights * \
-            budget_to_token / separation_size       # Shape: (2^n)
+                group_max = flattened_sparsities[separation[i][0]]
+            for j in range(len(separation[i])):
+                weights[done+j] = group_max
+            done += len(separation[i])
+            # separation_gap[i] = group_max
+        # print("DEBUG", weights)
+        allocation_weights = torch.softmax(weights*-1, dim=0)
+        # print("DEBUG", allocation_weights)
+        budget_allocation = allocation_weights * budget_to_token
+        # print("DEBUG", budget_allocation)
 
         # eviction
         # take summation_gqa (l,b, num_kv_head, qlen), separation, budget_allocation
         old_key_cache = self.key_cache
         old_value_cache = self.value_cache
-        summation_gqa = summation.view(
+        attn_votes_gqa = attn_votes.view(
             l, b, -1, repeat_factor, qlen).mean(axis=3)  # NOTE: tuning point
         # print(f"DEBUG, g_summation {summation_gqa.shape}")
         # ADD POOLING
@@ -239,20 +259,32 @@ class KVHashCache(Cache):
             [None for _ in range(self.config.num_key_value_heads)]
             for _ in range(self.config.num_hidden_layers)
         ]
+        # for i in range(len(separation)):
+        #     b_i = int(budget_allocation[i])
+        #     for j in range(len(separation[i])):
+        #         g_id = separation[i][j]
+        #         layer_idx = g_id // self.config.num_key_value_heads
+        #         kv_head_idx = g_id % self.config.num_key_value_heads
+        #         keep_idx = self.head_eviction(
+        #             attn_votes_gqa[layer_idx, 0, kv_head_idx, :], layer_idx, kv_head_idx, b_i)
+        #         new_key_cache[layer_idx][kv_head_idx] = \
+        #             self.key_cache[layer_idx][0,
+        #                                       kv_head_idx, keep_idx, :].clone()
+        #         new_value_cache[layer_idx][kv_head_idx] = \
+        #             self.value_cache[layer_idx][0,
+        #                                         kv_head_idx, keep_idx, :].clone()
+        separation = [item for sublist in separation for item in sublist]   # flatten
+        # print("DEBUG", separation)
         for i in range(len(separation)):
-            b_i = int(budget_allocation[i])
-            for j in range(len(separation[i])):
-                g_id = separation[i][j]
-                layer_idx = g_id // self.config.num_key_value_heads
-                kv_head_idx = g_id % self.config.num_key_value_heads
-                keep_idx = self.head_eviction(
-                    summation_gqa[layer_idx, 0, kv_head_idx, :], layer_idx, kv_head_idx, b_i)
-                new_key_cache[layer_idx][kv_head_idx] = \
-                    self.key_cache[layer_idx][0,
-                                              kv_head_idx, keep_idx, :].clone()
-                new_value_cache[layer_idx][kv_head_idx] = \
-                    self.value_cache[layer_idx][0,
-                                                kv_head_idx, keep_idx, :].clone()
+            g_id = separation[i]
+            layer_idx = g_id // self.config.num_key_value_heads
+            kv_head_idx = g_id % self.config.num_key_value_heads
+            keep_idx = self.head_eviction(
+                attn_votes_gqa[layer_idx, 0, kv_head_idx, :], layer_idx, kv_head_idx, budget_allocation[i])
+            new_key_cache[layer_idx][kv_head_idx] = \
+                self.key_cache[layer_idx][0, kv_head_idx, keep_idx, :].clone()
+            new_value_cache[layer_idx][kv_head_idx] = \
+                self.value_cache[layer_idx][0, kv_head_idx, keep_idx, :].clone()
         self.key_cache = new_key_cache
         self.value_cache = new_value_cache
 
@@ -266,6 +298,7 @@ class KVHashCache(Cache):
         """
             budget is the number of token to keep
         """
+        budget = int(budget)
         # print(
         #    f"DEBUG [head_eviction], scorer {scorer.shape}, l={l_id}, h={h_id}, b={budget}")
         if budget < self.recent_protect_budget:
@@ -283,7 +316,7 @@ class KVHashCache(Cache):
 
         # Identify indices to keep using top-k and protect the recent window
         _, keep_idx = torch.topk(
-            scorer_pooled, k=budget - self.recent_protect_budget, largest=True)
+            scorer, k=budget - self.recent_protect_budget, largest=True)
         keep_idx = torch.cat((keep_idx, torch.arange(
             scorer.size(0) - self.recent_protect_budget, scorer.size(0), device=keep_idx.device)))
         keep_idx = keep_idx.sort().values
