@@ -1,11 +1,13 @@
 #!/bin/sh
-#SBATCH --job-name=kv
-#SBATCH --output=kv_%A.out
-#SBATCH --error=kv_%A.err
+#SBATCH --job-name=kv-3232
+#SBATCH --output=kv-3232_%A.out
+#SBATCH --error=kv-3232_%A.err
 #SBATCH --time=100
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jinfan@comp.nus.edu.sg
 #SBATCH --gres=gpu:a100-80:1
+
+# 3232 = Latest 32, PCA 32
 
 . .venv/bin/activate
 
@@ -17,7 +19,7 @@ srun python run_longbench.py \
     --recent_protect_budget=64 \
     --cache_budget=512 \
     --proxy_total=64 \
-    --proxy_latest=16 \
+    --proxy_latest=32 \
     --n_recursion=-1 \
     --task="all"
 
@@ -29,5 +31,5 @@ srun python eval_longbench.py \
     --recent_protect_budget=64 \
     --cache_budget=512 \
     --proxy_total=64 \
-    --proxy_latest=16 \
+    --proxy_latest=32 \
     --n_recursion=-1

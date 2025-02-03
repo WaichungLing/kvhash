@@ -133,7 +133,7 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
                 do_sample=False,
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
                 use_cache=True,
-                past_key_values=past_key_value
+                past_key_values=past_key_value,
             )[0]
         else:
             if past_key_value == None:
@@ -150,7 +150,7 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         if past_key_value is not None:
             print(f"===== done. ====")
             past_key_value.clear()
-        
+
         print(pred)
 
         with open(out_path, "a", encoding="utf-8") as f:
@@ -205,7 +205,7 @@ def main():
             proxy_total=args.proxy_total,
             proxy_latest=args.proxy_latest,
             top_rank=args.top_rank,
-            n_recursion=args.n_recursion
+            n_recursion=args.n_recursion,
         ).to(args.device)
 
     # Prepare dataset
