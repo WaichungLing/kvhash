@@ -77,6 +77,9 @@ class KVHashCache(Cache):
     # select proxy from query
     def pca_select(self, query: torch.Tensor, key: torch.Tensor, r: int,  total: int, latest: int):
         s, h = query.shape
+        last_16_indices = torch.arange(s - latest, s, device=key.device)
+        if total == latest:
+            return last_16_indices
         pca_center = key - key.mean(dim=0)
         if pca_center.dtype != torch.float32:
             pca_center = pca_center.to(torch.float32)
@@ -87,7 +90,6 @@ class KVHashCache(Cache):
         importance_scores = projection.pow(2).sum(dim=1)  # (s,)
         _, top_k_importance_indices = torch.topk(
             importance_scores, k=total, largest=True)
-        last_16_indices = torch.arange(s - latest, s, device=key.device)
         top_k_importance_indices = top_k_importance_indices[~torch.isin(
             top_k_importance_indices, last_16_indices)]
         remaining_top_indices = top_k_importance_indices[:total - latest]
