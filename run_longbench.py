@@ -92,6 +92,13 @@ def build_chat(tokenizer, prompt, model_name):
         prompt = header + f" ### Human: {prompt}\n###"
     elif "internlm" in model_name:
         prompt = f"<|User|>:{prompt}<eoh>\n<|Bot|>:"
+    elif "llama-3" in model_name.lower() and "instruct" in model_name.lower():
+        prompt =  [{ "role": "user", "content": prompt}]
+        prompt = tokenizer.apply_chat_template(
+                prompt,
+                tokenize=False,
+                add_generation_prompt=True
+        )
     return prompt
 
 
