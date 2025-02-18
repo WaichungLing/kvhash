@@ -183,7 +183,7 @@ class KVHashCache(Cache):
         attn_votes = torch.mean(attn_probs, dim=-2)
         # print(f"DEBUG, attn_votes {attn_votes.shape}")
         attn_votes_reshaped = attn_votes.view(-1, 1, attn_votes.size(-1))
-        attn_votes_pooled = F.avg_pool1d(
+        attn_votes_pooled = F.max_pool1d(
             attn_votes_reshaped, 
             kernel_size=self.kernel_size, 
             padding=self.kernel_size // 2, 
