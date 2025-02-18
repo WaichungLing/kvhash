@@ -202,7 +202,7 @@ class KVHashCache(Cache):
         # print(f"DEBUG, sparsity {sparsity}")
 
         # GQA processing
-        grouped_sparsities, _ = sparsity.view(l, b, self.config.num_key_value_heads, repeat_factor).min(
+        grouped_sparsities = sparsity.view(l, b, self.config.num_key_value_heads, repeat_factor).mean(
             dim=-1)    # Shape: (num_layers, batch, num_key_value_head)
         # print(f"DEBUG, g_sparsity {grouped_sparsities.shape}")
         # (num_layer * num_key_value_heads, ), ASSUMES BATCH = 1

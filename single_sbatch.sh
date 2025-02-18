@@ -16,7 +16,7 @@ srun python run_longbench.py \
     --cache_budget=512 \
     --proxy_total=64 \
     --proxy_latest=64 \
-    --n_recursion=-1 \
+    --n_recursion=3 \
     --task="all" > kv.out 2> kv.err
 
 # Run the evaluation script
@@ -28,4 +28,4 @@ srun python eval_longbench.py \
     --cache_budget=512 \
     --proxy_total=64 \
     --proxy_latest=64 \
-    --n_recursion=-1 > ev.out 2> ev.err
+    --n_recursion=3 > ev.out 2> ev.err
