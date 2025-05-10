@@ -16,7 +16,7 @@ def parse_args():
     # kv cache
     parser.add_argument("--enable_kvhash", type=bool, default=True,
                         help="kvhash ratio")
-    parser.add_argument("--cache_budget", type=float, default=0.6, help="kv cache budget")
+    parser.add_argument("--cache_budget", type=float, default=1, help="kv cache budget")
     parser.add_argument("--sink_protect_tokens", type=int, default=128, help="number of tokens to be protect at the head") # put back 256
     parser.add_argument("--recent_protect_budget", type=int, default=0.01, help="ration of tokens to be protect at the end") # put back 0.01
     parser.add_argument("--min_eviction_seqlen", type=int, default=1024, help="sequence length that starts eviction") # put back 2048

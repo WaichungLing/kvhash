@@ -19,11 +19,10 @@ class KVHashCache(Cache):
 
         self.key_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.value_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.query_cache: List[torch.Tensor] = [None] * self.config.num_hidden_layers   # NOTE: temporary
         self.attn_score: List[torch.Tensor] = [None] * self.config.num_hidden_layers    # NOTE: temporary
 
-        self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
-        self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        # self.hash_values: List[torch.Tensor] = [None] * self.config.num_hidden_layers
+        # self.attn_sum: List[torch.Tensor] = [None] * self.config.num_hidden_layers
         self.register_buffer("div_planes", torch.randn((self.num_planes, self.config.head_dim), dtype=torch.float32))
         self.register_buffer("powers_of_two", 2 ** torch.arange(self.num_planes - 1, -1, -1, dtype=torch.float32))
 
@@ -70,13 +69,13 @@ class KVHashCache(Cache):
         #     print(f"===== summation.shape = {summation.shape}")
         #     print(f'===== summation after {summation[:,0,:]}')
 
-        if self.attn_sum[layer_idx] is None:
-            self.attn_sum[layer_idx] = summation
-        else:
-            self.attn_sum[layer_idx] += summation[:, :, :self.attn_sum[layer_idx].shape[-1]]
-            q_len = summation.shape[-1] - self.attn_sum[layer_idx].shape[-1]
-            new_in = summation[:, :, -q_len:]
-            self.attn_sum[layer_idx] = torch.cat([self.attn_sum[layer_idx], new_in], dim=2)
+        # if self.attn_sum[layer_idx] is None:
+        #     self.attn_sum[layer_idx] = summation
+        # else:
+        #     self.attn_sum[layer_idx] += summation[:, :, :self.attn_sum[layer_idx].shape[-1]]
+        #     q_len = summation.shape[-1] - self.attn_sum[layer_idx].shape[-1]
+        #     new_in = summation[:, :, -q_len:]
+        #     self.attn_sum[layer_idx] = torch.cat([self.attn_sum[layer_idx], new_in], dim=2)
         # if layer_idx == 0 and self.attn_sum[layer_idx] is not None:
         #     print(f"attn_sum shape: {self.attn_sum[layer_idx].shape}")
 
@@ -108,11 +107,13 @@ class KVHashCache(Cache):
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+
+        if layer_idx == 0:
+            self._seen_tokens += key_states.shape[-2]
         
         if self.key_cache[layer_idx] is None or self.value_cache[layer_idx] is None:
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
-            self.query_cache[layer_idx] = query_states
         else:
             self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
             self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)

@@ -16,13 +16,12 @@ LONGBENCH_TASKS = ["narrativeqa", "qasper", "multifieldqa_en", "multifieldqa_zh"
                     "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
                     "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
 
-MAX_CONTEXT = 1*1024
+MAX_CONTEXT = 4096
 
 def seed_everything(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    # np.random.seed(seed)
-    # random.seed(seed)
+    np.random.seed(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.cuda.manual_seed_all(seed)
@@ -59,10 +58,15 @@ def post_process(response, model_name):
 
 def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, device, model_name, out_path):
     idx = 0
+
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
         tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt").input_ids[0]
+        print(f"Prompt length before truncate: {len(tokenized_prompt)}")
+        if len(tokenized_prompt) < 3500 or len(tokenized_prompt) > MAX_CONTEXT:
+            continue
+
         if "chatglm3" in model_name:
             tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt", add_special_tokens=False).input_ids[0]
         if len(tokenized_prompt) > MAX_CONTEXT:
@@ -104,29 +108,22 @@ def get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dat
         pred = post_process(pred, model_name)
         if past_key_value is not None:
             print(f"===== done. KV {past_key_value.key_cache[0].shape[-2]}/{past_key_value._seen_tokens} ====")
+            print(f"Generation: {pred}")
 
             # ======== get qka npy =========
-            qqq = past_key_value.query_cache
-            qqq_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in qqq]
-            np.save("query_state.npy", np.array(qqq_cpu, dtype=object))
-
-            aaa = past_key_value.attn_score
-            aaa_cpu = [layer.to(dtype=torch.float32).cpu().numpy() for layer in aaa]
-            np.save("attn_score.npy", np.array(aaa_cpu, dtype=object))
-
-            prefill_len = qqq_cpu[0].shape[2]
-
-            kkk = past_key_value.key_cache
-            kkk_cpu = [layer.to(dtype=torch.float32).cpu().numpy()[:,:,:prefill_len,:] for layer in kkk]
-            np.save("key_state.npy", np.array(kkk_cpu, dtype=object))
-
-            print(f"successfully saved. query {qqq_cpu[0].shape}, key {kkk_cpu[0].shape}")
+            # for i, layer in enumerate(past_key_value.attn_score):
+            #     np.save(f"notebooks/qkvs/a_{i}.npy", layer.to(torch.float32).cpu().numpy())
+            #
+            # for i, layer in enumerate(past_key_value.value_cache):
+            #     np.save(f"notebooks/qkvs/v_{i}.npy", layer.to(torch.float32).cpu().numpy())
+            #
+            # print(f"successfully saved")
             # ==============================
 
             past_key_value.clear()
 
-        if idx == 0:
-            break
+        break
+
         idx += 1
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
@@ -183,7 +180,7 @@ def main():
 
     print("Loading everything done")
 
-    past_key_value = None
+    past_key_value = DynamicCache().to(args.device)
     if args.enable_kvhash:
         past_key_value = KVHashCache(
             config,
@@ -215,7 +212,6 @@ def main():
         print("Load dataset done")
 
         get_pred(model, tokenizer, past_key_value, data, max_gen, prompt_format, dataset, args.device, args.model_name, out_path)
-
 
 if __name__ == "__main__":
     main()
