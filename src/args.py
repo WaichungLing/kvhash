@@ -10,13 +10,13 @@ def parse_args():
     parser.add_argument("--data_dir", type=str, default="data", help="Cache directory for dataset etc")
     parser.add_argument("--pred_dir", type=str, default="pred", help="Result directory that holds experiment output")
     # unicache
-    parser.add_argument("--enable_eviction", action="store_true", default=False, help="whether evict")
+    parser.add_argument("--enable_eviction", action="store_true", default=True, help="whether evict")
     parser.add_argument("--cache_budget", type=int, default=512, help="average kv cache budget per head")
     parser.add_argument("--recent_protect_budget", type=int, default=32, help="number of tokens to be protect at the end")  
     parser.add_argument("--proxy_total", type=int, default=64, help="number of query proxy tokens")
     parser.add_argument("--proxy_latest", type=int, default=16, help="number of latest window of proxy")
     parser.add_argument("--top_rank", type=int, default=4, help="top rank for PCA reduction")
-    parser.add_argument("--n_recursion", type=int, default=1, help="number of recursion for elbow point allocation, [0,1,2,3]")
+    parser.add_argument("--n_recursion", type=int, default=-1, help="number of recursion for elbow point allocation, [0,1,2,3]")
     # tasks:
-    parser.add_argument("--task", type=str, default="narrativeqa", help="evaluation task")
+    parser.add_argument("--task", type=str, default="all", help="evaluation task")
     return parser.parse_args()

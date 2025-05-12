@@ -9,3 +9,4 @@ result
 notebooks/.idea/
 *.npy
 pred/
+.idea

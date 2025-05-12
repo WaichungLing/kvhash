@@ -1,24 +1,23 @@
-import torch
 import math
 import time
-import torch.nn.functional as F
-from torch import nn
 from typing import Any, Dict, List, Optional, Tuple
+
+import torch
+import torch.nn.functional as F
 from transformers.cache_utils import Cache
-from transformers.models.llama.modeling_llama import repeat_kv
 
 
 class KVHashCache(Cache):
     def __init__(
-        self,
-        config,
-        cache_budget,
-        recent_protect_budget,
-        device: str | None,
-        proxy_total: int = 64,
-        proxy_latest: int = 16,
-        top_rank: int = 4,
-        n_recursion: int = 1
+            self,
+            config,
+            cache_budget,
+            recent_protect_budget,
+            device: str | None,
+            proxy_total: int = 64,
+            proxy_latest: int = 16,
+            top_rank: int = 4,
+            n_recursion: int = 1
     ) -> None:
         super().__init__()
         self.config = config
@@ -35,13 +34,16 @@ class KVHashCache(Cache):
 
         # [(batch, num_key_value_head, qlen, hidden)] * layer
         self.key_cache: List[torch.Tensor] = [
-            None] * self.config.num_hidden_layers
+                                                 None] * self.config.num_hidden_layers
         # [(batch, num_key_value_head, qlen, hidden)] * layer
         self.value_cache: List[torch.Tensor] = [
-            None] * self.config.num_hidden_layers
+                                                   None] * self.config.num_hidden_layers
         # [(batch, num_attention_head, proxy_total, hidden)] * layer
         self.query_proxy: List[torch.Tensor] = [
-            None] * self.config.num_hidden_layers
+                                                   None] * self.config.num_hidden_layers
+        # [(batch, num_attention_head, proxy_total)] * layer
+        self.query_indices: List[torch.Tensor] = [
+                                                   None] * self.config.num_hidden_layers
 
         if device is not None:
             self.device = device
@@ -75,7 +77,7 @@ class KVHashCache(Cache):
         return len(self.key_cache)
 
     # select proxy from query
-    def pca_select(self, query: torch.Tensor, key: torch.Tensor, r: int,  total: int, latest: int):
+    def pca_select(self, query: torch.Tensor, key: torch.Tensor, r: int, total: int, latest: int):
         s, h = query.shape
         last_16_indices = torch.arange(s - latest, s, device=key.device)
         if total == latest:
@@ -83,11 +85,12 @@ class KVHashCache(Cache):
         pca_center = key - key.mean(dim=0)
         if pca_center.dtype != torch.float32:
             pca_center = pca_center.to(torch.float32)
-        U, S, Vh = torch.linalg.svd(
-            pca_center, full_matrices=False)  # Vh: (h, h)
+        _, S, Vh = torch.linalg.svd(pca_center, full_matrices=False)  # Vh: (h, h)
         top_PCs = (S[:r, None] * Vh[:r, :])  # (r, h)
+
         projection = torch.matmul(query.to(top_PCs.dtype), top_PCs.T)  # (s, r)
         importance_scores = projection.pow(2).sum(dim=1)  # (s,)
+
         _, top_k_importance_indices = torch.topk(
             importance_scores, k=total, largest=True)
         top_k_importance_indices = top_k_importance_indices[~torch.isin(
@@ -97,12 +100,12 @@ class KVHashCache(Cache):
         return combined_indices
 
     def update(
-        self,
-        key_states: torch.Tensor,
-        value_states: torch.Tensor,
-        query_states: torch.Tensor,
-        layer_idx: int,
-        cache_kwargs: Optional[Dict[str, Any]] = None,
+            self,
+            key_states: torch.Tensor,
+            value_states: torch.Tensor,
+            query_states: torch.Tensor,
+            layer_idx: int,
+            cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if layer_idx == 0:
             self._seen_tokens += key_states.shape[-2]
@@ -113,18 +116,20 @@ class KVHashCache(Cache):
             self.value_cache[layer_idx] = value_states
 
             l_query_proxy = []
+            l_query_indices = []
             for i in range(self.config.num_attention_heads):
                 one_q = query_states[0, i]
-                one_k = key_states[0, int(i//self.config.num_key_value_heads)]
+                one_k = key_states[0, int(i // self.config.num_key_value_heads)]
                 t1 = time.time_ns()
                 indices = self.pca_select(
-                    one_q, one_q, self.top_rank, self.proxy_total, self.proxy_latest)
+                    one_q, one_k, self.top_rank, self.proxy_total, self.proxy_latest)   # TODO: Tuning point qq,qk
                 dt = time.time_ns() - t1
                 # print(f"[DEBUG] dt {dt}")
-                one_proxy = one_q[indices, :]      # (proxy_total, num_hidden)
+                one_proxy = one_q[indices, :]  # (proxy_total, num_hidden)
                 l_query_proxy.append(one_proxy)
-            self.query_proxy[layer_idx] = torch.stack(
-                l_query_proxy, dim=0).unsqueeze(0)
+                l_query_indices.append(indices)
+            self.query_proxy[layer_idx] = torch.stack(l_query_proxy, dim=0).unsqueeze(0)
+            self.query_indices[layer_idx] = torch.stack(l_query_indices, dim=0).unsqueeze(0)
             # print(
             #     f"[DEBUG update] l = {layer_idx}, proxy_dim = {self.query_proxy[layer_idx].shape}")
         else:
@@ -156,12 +161,14 @@ class KVHashCache(Cache):
             self.value_cache    # [(batch, num_key_value_head, qlen, hidden)] * layer
             self.query_proxy    # [(batch, num_attention_head, proxy_total, hidden)] * layer
         """
-        key_cache = torch.stack(
-            self.key_cache)         # Shape: (num_layers, batch, num_key_value_head, qlen, hidden)
+        # Shape: (num_layers, batch, num_key_value_head, qlen, hidden)
+        key_cache = torch.stack(self.key_cache) 
         # Shape: (num_layers, batch, num_key_value_head, qlen, hidden)
         value_cache = torch.stack(self.value_cache)
         # Shape: (num_layers, batch, num_attention_head, proxy_total, hidden)
         query_proxy = torch.stack(self.query_proxy)
+        # Shape: (num_layers, batch, num_attention_head, proxy_total)
+        query_indices = torch.stack(self.query_indices)
         # print(
         #    f"DEBUG, key {key_cache.shape}, value {value_cache.shape}, query_proxy {query_proxy.shape}")
         l, b, gqah, qlen, hidden = key_cache.shape
@@ -175,35 +182,45 @@ class KVHashCache(Cache):
             'lbpqh,lbpkh->lbpqk',
             query_proxy,
             key_cache_repeated
-        ) / math.sqrt(self.config.head_dim)             # Shape: (num_layers, batch, num_attention_heads, proxy_total, qlen)
+        ) / math.sqrt(self.config.head_dim)  # Shape: (num_layers, batch, num_attention_heads, proxy_total, qlen)
+        
+        mask = torch.zeros_like(attn_scores, dtype=torch.bool)
+        for layer_idx in range(l):
+            for head_idx in range(self.config.num_attention_heads):
+                proxy_indices = query_indices[layer_idx, 0, head_idx]
+                for proxy_idx in range(proxy_indices.size(0)):
+                    pos_idx = proxy_indices[proxy_idx].item()  # convert to Python int
+                    mask[layer_idx, :, head_idx, proxy_idx, pos_idx+1:] = True
+        attn_scores = attn_scores.masked_fill(mask, float('-inf'))
+        
         # Shape: (num_layers, batch, num_attention_head, proxy_total, qlen)
         attn_probs = torch.softmax(attn_scores, dim=-1)
         # print(f"DEBUG, proxy attn {attn_probs.shape}")
         # Shape: (num_layers, batch, num_attention_head, qlen)
-        attn_votes = torch.mean(attn_probs, dim=-2)
+        attn_votes = torch.sum(attn_probs, dim=-2)         # TODO: try sum
         # print(f"DEBUG, attn_votes {attn_votes.shape}")
-        attn_votes_reshaped = attn_votes.view(-1, 1, attn_votes.size(-1))
-        attn_votes_pooled = F.max_pool1d(
-            attn_votes_reshaped, 
-            kernel_size=self.kernel_size, 
-            padding=self.kernel_size // 2, 
-            stride=1
-        )
-        attn_votes = attn_votes_pooled.view(l, b, self.config.num_attention_heads, -1)
+        # attn_votes_reshaped = attn_votes.view(-1, 1, attn_votes.size(-1))   # TODO: Tuning point, put pooling after sparsity
+        # attn_votes_pooled = F.max_pool1d(
+        #     attn_votes_reshaped,
+        #     kernel_size=self.kernel_size,
+        #     padding=self.kernel_size // 2,
+        #     stride=1
+        # )
+        # attn_votes = attn_votes_pooled.view(l, b, self.config.num_attention_heads, -1)
         # Shape: (num_layers, batch, num_attention_head)
         maximum, _ = torch.max(attn_votes, dim=-1)
         # Shape: (num_layers, batch, num_attention_head)
         minimum, _ = torch.min(attn_votes, dim=-1)
         # print(f"DEBUG, min/max {maximum.shape}")
-        threshold = minimum + 0.0005 * (maximum - minimum)
+        threshold = minimum + 0.0001 * (maximum - minimum)
         # Shape: (num_layers, batch, num_attention_head)
         sparsity = torch.sum(
             attn_votes < threshold.unsqueeze(-1), dim=-1) / attn_votes.shape[-1]
-        # print(f"DEBUG, sparsity {sparsity}")
+        print(f"DEBUG, sparsity {sparsity[0,0,0]}")
 
         # GQA processing
         grouped_sparsities = sparsity.view(l, b, self.config.num_key_value_heads, repeat_factor).mean(
-            dim=-1)    # Shape: (num_layers, batch, num_key_value_head)
+            dim=-1)  # Shape: (num_layers, batch, num_key_value_head)
         # print(f"DEBUG, g_sparsity {grouped_sparsities.shape}")
         # (num_layer * num_key_value_heads, ), ASSUMES BATCH = 1
         # print("DEBUG", grouped_sparsities)
@@ -224,7 +241,7 @@ class KVHashCache(Cache):
             separation = sorted_indices.unsqueeze(-1)
         # Budget allocation for each group
         budget_to_token = self.cache_budget * \
-            self.config.num_key_value_heads * self.config.num_hidden_layers
+                          self.config.num_key_value_heads * self.config.num_hidden_layers
         weights = torch.zeros(len(flattened_sparsities))
         # separation_size = torch.tensor(
         #     [len(group) for group in separation], dtype=separation_gap.dtype)
@@ -236,11 +253,11 @@ class KVHashCache(Cache):
             else:
                 group_max = flattened_sparsities[separation[i][0]]
             for j in range(len(separation[i])):
-                weights[done+j] = group_max
+                weights[done + j] = group_max
             done += len(separation[i])
             # separation_gap[i] = group_max
         # print("DEBUG", weights)
-        allocation_weights = torch.softmax(weights*-1, dim=0)
+        allocation_weights = torch.softmax(weights * -1, dim=0)
         # print("DEBUG", allocation_weights)
         budget_allocation = allocation_weights * budget_to_token
         # print("DEBUG", budget_allocation)
@@ -249,10 +266,17 @@ class KVHashCache(Cache):
         # take summation_gqa (l,b, num_kv_head, qlen), separation, budget_allocation
         old_key_cache = self.key_cache
         old_value_cache = self.value_cache
+        attn_votes_reshaped = attn_votes.view(-1, 1, attn_votes.size(-1))  # TODO: Tuning point, put pooling after sparsity
+        attn_votes_pooled = F.max_pool1d(
+            attn_votes_reshaped,
+            kernel_size=self.kernel_size,
+            padding=self.kernel_size // 2,
+            stride=1
+        )
+        attn_votes = attn_votes_pooled.view(l, b, self.config.num_attention_heads, -1)
         attn_votes_gqa = attn_votes.view(
-            l, b, -1, repeat_factor, qlen).mean(axis=3)  # NOTE: tuning point
+            l, b, -1, repeat_factor, qlen).mean(dim=3)
         # print(f"DEBUG, g_summation {summation_gqa.shape}")
-        # ADD POOLING
         new_key_cache = [
             [None for _ in range(self.config.num_key_value_heads)]
             for _ in range(self.config.num_hidden_layers)
@@ -275,7 +299,7 @@ class KVHashCache(Cache):
         #         new_value_cache[layer_idx][kv_head_idx] = \
         #             self.value_cache[layer_idx][0,
         #                                         kv_head_idx, keep_idx, :].clone()
-        separation = [item for sublist in separation for item in sublist]   # flatten
+        separation = [item for sublist in separation for item in sublist]  # flatten
         # print("DEBUG", separation)
         for i in range(len(separation)):
             g_id = separation[i]
@@ -376,11 +400,13 @@ class KVHashCache(Cache):
     def clear(self):
         self._seen_tokens = 0
         self.key_cache: List[torch.Tensor] = [
-            None] * self.config.num_hidden_layers
+                                                 None] * self.config.num_hidden_layers
         self.value_cache: List[torch.Tensor] = [
-            None] * self.config.num_hidden_layers
+                                                   None] * self.config.num_hidden_layers
         self.query_proxy: List[torch.Tensor] = [
-            None] * self.config.num_hidden_layers
+                                                   None] * self.config.num_hidden_layers
+        self.query_indices: List[torch.Tensor] = [
+                                                   None] * self.config.num_hidden_layers
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer index can be optionally passed."""
